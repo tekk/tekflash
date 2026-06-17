@@ -9,6 +9,7 @@ pub mod compress;
 pub mod format;
 pub mod hasher;
 pub mod reader;
+pub mod verify;
 pub mod writer;
 
 pub use buffer::{Buffer, BufferPool};
