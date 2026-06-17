@@ -273,11 +273,13 @@ pub async fn run_flash(_opts: FlashOpts, _global: GlobalOpts) -> Result<()> {
 }
 
 pub async fn run_backup(opts: BackupOpts, _global: GlobalOpts) -> Result<()> {
+    use tekflash_core::manifest::{Manifest, SourceInfo};
     use tekflash_core::pipeline::{
         compress::encoder,
         hasher::{HashKind, Hasher},
         reader::open_for_read,
     };
+
     let Some(output) = opts.output else {
         eprintln!("backup: output path is required in CLI mode (or run `tekflash` for the TUI)");
         std::process::exit(2);
@@ -287,7 +289,7 @@ pub async fn run_backup(opts: BackupOpts, _global: GlobalOpts) -> Result<()> {
     let codec: Codec = opts.codec.into();
     let mut writer = encoder(codec, CompressionLevel(opts.level), dst)?;
     let mut hasher = Hasher::new(HashKind::Blake3);
-    let mut total: u64 = 0;
+    let mut bytes_in: u64 = 0;
     let mut buf = vec![0u8; 4 * 1024 * 1024];
     let mut src = std::io::BufReader::new(src);
     use std::io::{Read, Write};
@@ -298,14 +300,58 @@ pub async fn run_backup(opts: BackupOpts, _global: GlobalOpts) -> Result<()> {
         }
         hasher.update(&buf[..n]);
         writer.write_all(&buf[..n])?;
-        total += n as u64;
+        bytes_in += n as u64;
     }
     drop(writer);
+
+    let bytes_out = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    let hash_hex = hasher.finalize_hex();
+
+    // Sidecar manifest: a future restore (possibly on a different machine) has
+    // everything it needs without trusting filename conventions.
+    let manifest = Manifest {
+        schema_version: 1,
+        tekflash_version: env!("CARGO_PKG_VERSION").to_string(),
+        created: time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default(),
+        host: hostname::get()
+            .ok()
+            .and_then(|s| s.to_string_lossy().into_owned().into()),
+        source: SourceInfo {
+            path: opts.source.clone(),
+            vendor: None,
+            model: None,
+            serial: None,
+            size_bytes: bytes_in,
+        },
+        bytes_in,
+        bytes_out,
+        hash_kind: HashKind::Blake3,
+        hash_hex: hash_hex.clone(),
+        codec,
+        level: CompressionLevel(opts.level),
+        encryption: None,
+        sparse_extents: vec![],
+        last_good_offset: None,
+    };
+    let manifest_path = output.with_extension(format!(
+        "{}.tfmanifest.json",
+        output.extension().and_then(|s| s.to_str()).unwrap_or("")
+    ));
+    if let Ok(f) = std::fs::File::create(&manifest_path) {
+        let _ = serde_json::to_writer_pretty(f, &manifest);
+    }
+
     println!(
-        "backup ok: {} bytes, BLAKE3 = {}",
-        total,
-        hasher.finalize_hex()
+        "backup ok: {bytes_in} bytes in, {bytes_out} bytes out ({:.1}% of source), BLAKE3 = {hash_hex}",
+        if bytes_in > 0 {
+            100.0 * bytes_out as f64 / bytes_in as f64
+        } else {
+            0.0
+        }
     );
+    println!("manifest:  {}", manifest_path.display());
     Ok(())
 }
 

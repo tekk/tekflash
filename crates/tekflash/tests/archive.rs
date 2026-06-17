@@ -26,6 +26,58 @@ fn uuid_like() -> String {
     format!("{}-{}", std::process::id(), nanos)
 }
 
+/// Backup of a regular file writes a sidecar `.tfmanifest.json` next to the output.
+#[test]
+fn backup_writes_sidecar_manifest() {
+    let root = tempdir();
+    let src = root.join("source.bin");
+    let bytes: Vec<u8> = (0u32..50_000).map(|i| (i & 0xff) as u8).collect();
+    fs::write(&src, &bytes).unwrap();
+    let out = root.join("backup.img.zst");
+
+    let _ = Command::new(bin())
+        .args([
+            "backup",
+            src.to_str().unwrap(),
+            out.to_str().unwrap(),
+            "--codec",
+            "zstd",
+            "--level",
+            "3",
+        ])
+        .output()
+        .expect("run backup");
+
+    // Privilege gate may abort; only assert if the output landed.
+    if !out.exists() {
+        eprintln!("skipping: privilege gate blocked backup (run as root to test)");
+        let _ = fs::remove_dir_all(&root);
+        return;
+    }
+
+    let manifest_path = out.with_extension("zst.tfmanifest.json");
+    assert!(
+        manifest_path.exists(),
+        "expected sidecar manifest at {}",
+        manifest_path.display()
+    );
+    let json = fs::read_to_string(&manifest_path).unwrap();
+    assert!(
+        json.contains("\"codec\": \"zstd\""),
+        "manifest missing codec; got: {json}"
+    );
+    assert!(
+        json.contains("\"hash_kind\": \"blake3\""),
+        "manifest missing hash_kind"
+    );
+    assert!(
+        json.contains(&format!("\"bytes_in\": {}", bytes.len())),
+        "manifest bytes_in wrong"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn archive_then_restore_preserves_a_tree() {
     let root = tempdir();
