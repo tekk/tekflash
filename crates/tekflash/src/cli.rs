@@ -309,19 +309,72 @@ pub async fn run_backup(opts: BackupOpts, _global: GlobalOpts) -> Result<()> {
     Ok(())
 }
 
-pub async fn run_archive(_opts: ArchiveOpts, _global: GlobalOpts) -> Result<()> {
-    eprintln!("archive: not implemented in this commit");
+pub async fn run_archive(opts: ArchiveOpts, _global: GlobalOpts) -> Result<()> {
+    use tekflash_core::archive::tar::archive_tree;
+    use tekflash_core::pipeline::compress::encoder;
+
+    let codec: Codec = opts.codec.into();
+    let dst = std::fs::File::create(&opts.output)?;
+    let writer = encoder(codec, CompressionLevel(opts.level), dst)?;
+
+    archive_tree(&opts.source, writer, &opts.exclude)?;
+    println!(
+        "archive ok: {} -> {} (codec {})",
+        opts.source.display(),
+        opts.output.display(),
+        codec.human()
+    );
     Ok(())
 }
 
-pub async fn run_restore(_opts: RestoreOpts, _global: GlobalOpts) -> Result<()> {
-    eprintln!("restore: not implemented in this commit");
+pub async fn run_restore(opts: RestoreOpts, _global: GlobalOpts) -> Result<()> {
+    use tekflash_core::archive::extract::extract_to;
+    use tekflash_core::pipeline::{
+        compress::{decoder, Codec},
+        format::detect_by_extension,
+    };
+
+    // Decide which codec to use by extension only — restore needs the codec before it
+    // can read the stream, so we accept the file-name hint. (Magic-byte detect would
+    // require a seekable peek + rewind on the source; cheap to add later.)
+    let codec = detect_by_extension(&opts.archive)
+        .map(Codec::from)
+        .unwrap_or(Codec::None);
+    let src = std::fs::File::open(&opts.archive)?;
+    let reader = decoder(codec, src)?;
+    extract_to(reader, &opts.target)?;
+    println!(
+        "restore ok: {} -> {} (codec {})",
+        opts.archive.display(),
+        opts.target.display(),
+        codec.human()
+    );
     Ok(())
 }
 
-pub async fn run_verify(_opts: VerifyOpts, _global: GlobalOpts) -> Result<()> {
-    eprintln!("verify: not implemented in this commit");
-    Ok(())
+pub async fn run_verify(opts: VerifyOpts, _global: GlobalOpts) -> Result<()> {
+    use tekflash_core::pipeline::verify::verify_full;
+    let Some(against) = opts.against.or(opts.manifest) else {
+        eprintln!("verify: pass either AGAINST <file> or --manifest <path>");
+        std::process::exit(2);
+    };
+    let source = std::fs::File::open(&against)?;
+    let outcome = verify_full(&opts.device, source)?;
+    if outcome.passed {
+        println!(
+            "verify ok: {} matches {} ({} bytes)",
+            opts.device.display(),
+            against.display(),
+            outcome.bytes_read
+        );
+        Ok(())
+    } else {
+        eprintln!(
+            "verify FAILED: first mismatch at offset {:?} after {} bytes",
+            outcome.first_mismatch_offset, outcome.bytes_read
+        );
+        std::process::exit(1);
+    }
 }
 
 pub async fn run_verify_queue(_global: GlobalOpts) -> Result<()> {

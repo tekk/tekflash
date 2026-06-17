@@ -6,6 +6,7 @@
 
 pub mod buffer;
 pub mod compress;
+pub mod crypto;
 pub mod format;
 pub mod hasher;
 pub mod reader;
