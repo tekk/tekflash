@@ -3,11 +3,29 @@
 A safe, fast, cross-platform TUI for flashing, backing up, and restoring block devices —
 SD cards, USB sticks, and other removable media — on macOS, Linux, and Windows 11+.
 
-> Status: early development. The workspace builds, the CLI surface and TUI shell are in
-> place, and the core library (compression, hashing, device enumeration, magic-byte
-> format detection) is wired and unit-tested. End-to-end flash / backup / restore
-> pipelines, verify-after-write, encryption, and the file browser view are landing in
-> follow-up commits.
+> Status: early development. The workspace builds, the CLI surface and TUI shell are
+> in place, and the following pipelines are wired and unit-tested end-to-end on macOS,
+> Linux, and Windows 11+:
+>
+> - **flash** — streams from any of `.iso / .img / .bin / .raw / .img.{zst,zsd,zstd,xz,gz,bz2,lz4,br}`
+>   (magic-byte detected, extension as a fallback) to a target with optional `--verify=full`.
+> - **backup** — bit-for-bit read, compress through any of zstd / lz4 / brotli / xz /
+>   gzip / bzip2, BLAKE3 captured during write, sidecar `.tfmanifest.json` written.
+> - **archive** — file-level tar with permissions/times/ownership preservation, piped
+>   through any codec.
+> - **restore** — streams an archive back through extract preserving metadata.
+> - **verify** — bytewise compare against a source file; reports first-mismatch offset.
+> - **list** — JSON or table device enumeration (macOS `diskutil`, Linux `lsblk`,
+>   Windows `Get-Disk`).
+> - **PQ-safe password encryption** — Argon2id (m=256 MiB, t=3, p=4) → ChaCha20-Poly1305
+>   framed AEAD; truncation/reordering/bit-flips all fail authentication.
+> - **TUI shell** — vivid dark + light palettes (truecolor / 256 / 16 / mono tiers),
+>   responsive layouts down to 80×24, ASCII fallback for VT consoles, device table,
+>   file browser (F2), help overlay (?).
+>
+> Multi-target flash, sampled/deferred verify modes, ML-KEM recipient mode, and the
+> full TUI flow connecting browser → flash/backup/restore are landing in follow-up
+> commits.
 
 ## Features (planned & in-progress)
 
