@@ -1,5 +1,5 @@
 //! In-TUI file browser.
-#![allow(dead_code)] // landed before its call sites; wired up by Flash/Backup/Restore views
+#![allow(dead_code)] // some helpers are wired up by Flash/Backup/Restore view-routing
 //!
 //! Used both as a standalone "pick a file" view (launched from the home view's
 //! Flash/Backup/Restore actions, from `F2` while focused on a path field, and from the

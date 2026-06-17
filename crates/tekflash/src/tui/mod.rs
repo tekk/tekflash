@@ -35,6 +35,7 @@ pub async fn run(global: GlobalOpts) -> Result<()> {
         selected: 0,
         show_help: false,
         show_all: false,
+        browser: None,
     };
 
     let result = event_loop(&mut term, &mut state).await;
@@ -58,6 +59,7 @@ pub struct AppState {
     pub selected: usize,
     pub show_help: bool,
     pub show_all: bool,
+    pub browser: Option<views::file_browser::FileBrowser>,
 }
 
 async fn event_loop<B: ratatui::backend::Backend>(
@@ -71,6 +73,10 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 widgets::too_small(f, area, &state.theme);
                 return;
             }
+            if let Some(browser) = &state.browser {
+                views::file_browser::render(f, area, browser, &state.theme);
+                return;
+            }
             let mode = layout::pick(area);
             views::home::render(f, area, mode, state);
             if state.show_help {
@@ -80,45 +86,92 @@ async fn event_loop<B: ratatui::backend::Backend>(
 
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
-                    KeyCode::Char('q') | KeyCode::Esc => {
-                        if state.show_help {
-                            state.show_help = false;
-                        } else {
+                Event::Key(k) if k.kind == KeyEventKind::Press => {
+                    if state.browser.is_some() {
+                        handle_browser_key(state, k.code, k.modifiers);
+                        continue;
+                    }
+                    match k.code {
+                        KeyCode::Char('q') | KeyCode::Esc => {
+                            if state.show_help {
+                                state.show_help = false;
+                            } else {
+                                return Ok(());
+                            }
+                        }
+                        KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(());
                         }
-                    }
-                    KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Ok(());
-                    }
-                    KeyCode::Char('?') | KeyCode::F(1) => {
-                        state.show_help = !state.show_help;
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if state.selected > 0 {
-                            state.selected -= 1;
+                        KeyCode::Char('?') | KeyCode::F(1) => {
+                            state.show_help = !state.show_help;
                         }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if state.selected + 1 < state.devices.len() {
-                            state.selected += 1;
+                        KeyCode::F(2) => {
+                            state.browser = Some(views::file_browser::FileBrowser::open(
+                                views::file_browser::default_start_dir(),
+                                views::file_browser::BrowseMode::Open,
+                            ));
                         }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if state.selected > 0 {
+                                state.selected -= 1;
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if state.selected + 1 < state.devices.len() {
+                                state.selected += 1;
+                            }
+                        }
+                        KeyCode::Tab => {
+                            state.show_all = !state.show_all;
+                            state.devices = tekflash_core::device::enumerate(state.show_all)
+                                .unwrap_or_default();
+                            state.selected =
+                                state.selected.min(state.devices.len().saturating_sub(1));
+                        }
+                        KeyCode::Char('r') => {
+                            state.devices = tekflash_core::device::enumerate(state.show_all)
+                                .unwrap_or_default();
+                        }
+                        _ => {}
                     }
-                    KeyCode::Tab => {
-                        state.show_all = !state.show_all;
-                        state.devices =
-                            tekflash_core::device::enumerate(state.show_all).unwrap_or_default();
-                        state.selected = state.selected.min(state.devices.len().saturating_sub(1));
-                    }
-                    KeyCode::Char('r') => {
-                        state.devices =
-                            tekflash_core::device::enumerate(state.show_all).unwrap_or_default();
-                    }
-                    _ => {}
-                },
+                }
                 Event::Resize(_, _) => {}
                 _ => {}
             }
         }
+    }
+}
+
+fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
+    let Some(browser) = state.browser.as_mut() else {
+        return;
+    };
+    match code {
+        KeyCode::Char('q') | KeyCode::Esc => {
+            state.browser = None;
+        }
+        KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => {
+            state.browser = None;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            browser.move_up();
+            browser.update_focus_preview();
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            browser.move_down();
+            browser.update_focus_preview();
+        }
+        KeyCode::Left => browser.go_parent(),
+        KeyCode::Right | KeyCode::Enter => {
+            if browser.enter_focused().is_some() {
+                // File picked — for now, drop back to the home view. A future
+                // commit hands the chosen path to whichever caller opened the
+                // browser (Flash source, Backup dest, etc.).
+                state.browser = None;
+            }
+        }
+        KeyCode::Char('.') => browser.toggle_hidden(),
+        KeyCode::Tab => browser.toggle_all_types(),
+        _ => {}
     }
 }
