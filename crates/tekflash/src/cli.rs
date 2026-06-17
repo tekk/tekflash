@@ -267,8 +267,102 @@ pub async fn run_list(_opts: ListOpts, global: GlobalOpts) -> Result<()> {
     Ok(())
 }
 
-pub async fn run_flash(_opts: FlashOpts, _global: GlobalOpts) -> Result<()> {
-    eprintln!("flash: not implemented in this commit");
+pub async fn run_flash(opts: FlashOpts, _global: GlobalOpts) -> Result<()> {
+    use tekflash_core::pipeline::{
+        compress::{decoder, Codec},
+        format::{detect, detect_by_extension},
+        hasher::{HashKind, Hasher},
+        verify::{verify_full_by_hash, VerifyMode},
+    };
+
+    let Some(source) = opts.source else {
+        eprintln!("flash: source is required in CLI mode (or run `tekflash` for the TUI)");
+        std::process::exit(2);
+    };
+    if opts.targets.is_empty() {
+        eprintln!("flash: at least one target device is required");
+        std::process::exit(2);
+    }
+    if opts.targets.len() > 1 {
+        eprintln!("flash: multi-target flash not yet wired in CLI mode (TUI supports it)");
+        std::process::exit(2);
+    }
+    let target = &opts.targets[0];
+
+    // Magic-byte detect on the source; fall back to extension if the file is shorter
+    // than a magic.
+    let codec: Codec = {
+        let mut head = [0u8; 16];
+        let mut f = std::fs::File::open(&source)?;
+        use std::io::Read;
+        let n = f.read(&mut head)?;
+        let fmt = detect(&head[..n]);
+        if matches!(fmt, tekflash_core::pipeline::format::InputFormat::Raw) {
+            detect_by_extension(&source)
+                .map(Codec::from)
+                .unwrap_or(Codec::None)
+        } else {
+            Codec::from(fmt)
+        }
+    };
+
+    // Open source through the appropriate decoder.
+    let src = std::fs::File::open(&source)?;
+    let mut reader = decoder(codec, src)?;
+
+    let mut dst = if opts.dry_run {
+        None
+    } else {
+        Some(std::fs::OpenOptions::new().write(true).open(target)?)
+    };
+
+    let mut hasher = Hasher::new(HashKind::Blake3);
+    let mut buf = vec![0u8; 4 * 1024 * 1024];
+    let mut total: u64 = 0;
+    use std::io::{Read, Write};
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        if let Some(d) = dst.as_mut() {
+            d.write_all(&buf[..n])?;
+        }
+        total += n as u64;
+    }
+    if let Some(mut d) = dst {
+        d.flush()?;
+    }
+
+    let hash = hasher.finalize_hex();
+    println!(
+        "flash {}: {} -> {} ({} bytes, BLAKE3 = {hash})",
+        if opts.dry_run { "(dry-run)" } else { "ok" },
+        source.display(),
+        target.display(),
+        total
+    );
+
+    let verify_mode = match opts.verify {
+        VerifyChoice::Off => VerifyMode::Off,
+        VerifyChoice::Full => VerifyMode::Full,
+        VerifyChoice::Sampled => VerifyMode::Sampled,
+        VerifyChoice::Deferred => VerifyMode::Deferred,
+    };
+    if verify_mode == VerifyMode::Full && !opts.dry_run {
+        eprintln!("verifying...");
+        let outcome = verify_full_by_hash(target, &hash, HashKind::Blake3)?;
+        if outcome.passed {
+            println!("verify ok: {} bytes match", outcome.bytes_read);
+        } else {
+            eprintln!(
+                "verify FAILED: device hash differs from source after {} bytes",
+                outcome.bytes_read
+            );
+            std::process::exit(1);
+        }
+    }
     Ok(())
 }
 
