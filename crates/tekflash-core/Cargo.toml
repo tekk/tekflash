@@ -1,0 +1,67 @@
+[package]
+name = "tekflash-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Core library for tekflash: device enumeration, streaming I/O pipeline, compression, encryption, archive"
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+
+color-eyre = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+zstd = { workspace = true }
+lz4_flex = { workspace = true }
+brotli = { workspace = true }
+xz2 = { workspace = true }
+flate2 = { workspace = true }
+bzip2 = { workspace = true }
+
+tar = { workspace = true }
+
+chacha20poly1305 = { workspace = true }
+argon2 = { workspace = true }
+rand = { workspace = true }
+rand_core = { workspace = true }
+zeroize = { workspace = true }
+ml-kem = { workspace = true }
+
+blake3 = { workspace = true }
+sha2 = { workspace = true }
+
+time = { workspace = true }
+hostname = { workspace = true }
+dirs = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+libc = { workspace = true }
+xattr = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Threading",
+    "Win32_System_SystemServices",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

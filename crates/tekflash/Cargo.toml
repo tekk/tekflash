@@ -1,0 +1,42 @@
+[package]
+name = "tekflash"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "TUI for flashing, backing up, and restoring block devices safely (macOS / Linux / Windows 11+)"
+default-run = "tekflash"
+
+[[bin]]
+name = "tekflash"
+path = "src/main.rs"
+
+[dependencies]
+tekflash-core = { path = "../tekflash-core" }
+
+tokio = { workspace = true }
+futures = { workspace = true }
+
+color-eyre = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+clap = { version = "4.5", features = ["derive", "wrap_help", "env"] }
+
+ratatui = { version = "0.28", default-features = false, features = ["crossterm"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+time = { workspace = true }
+dirs = { workspace = true }
+hostname = { workspace = true }
+
+[build-dependencies]
+clap = { version = "4.5", features = ["derive"] }
+clap_mangen = "0.2"
