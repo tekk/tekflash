@@ -14,6 +14,7 @@ use std::process::Command;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+#[allow(dead_code)] // serde fields read at parse time; many are reserved for richer UI later
 struct PsDisk {
     number: u32,
     #[serde(default)]

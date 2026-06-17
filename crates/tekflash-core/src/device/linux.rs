@@ -15,6 +15,7 @@ struct LsblkOut {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // serde fields read at parse time; many are reserved for richer UI later
 struct LsblkDev {
     name: String,
     #[serde(default)]
