@@ -249,6 +249,12 @@ fn precompute_total_bytes(root: &Path) -> u64 {
     let mut total = 0u64;
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
     while let Some(p) = stack.pop() {
+        // Skip the same system metadata dirs the archive walker will skip, so the
+        // total here matches what actually ends up in the tar.
+        let rel = p.strip_prefix(root).unwrap_or(&p);
+        if is_system_metadata(rel) {
+            continue;
+        }
         let Ok(meta) = std::fs::symlink_metadata(&p) else {
             continue;
         };
@@ -265,6 +271,59 @@ fn precompute_total_bytes(root: &Path) -> u64 {
     total
 }
 
+/// Top-level volume names we always skip in archives. These hold runtime metadata
+/// indexes, trashes, and recycle bins — useless in a backup and usually behind ACLs
+/// that block even sudo'd reads (Spotlight on macOS, System Volume Information on
+/// FAT/exFAT, etc).
+const SYSTEM_METADATA_DIRS: &[&str] = &[
+    ".Spotlight-V100",
+    ".fseventsd",
+    ".Trashes",
+    ".TemporaryItems",
+    ".DocumentRevisions-V100",
+    ".HFS+ Private Directory Data\r",
+    ".HFS+ Private Data",
+    ".vol",
+    "System Volume Information",
+    "$RECYCLE.BIN",
+];
+
+fn is_system_metadata(rel: &Path) -> bool {
+    let Some(first) = rel.components().next() else {
+        return false;
+    };
+    match first {
+        std::path::Component::Normal(name) => SYSTEM_METADATA_DIRS
+            .iter()
+            .any(|s| std::ffi::OsStr::new(*s) == name),
+        _ => false,
+    }
+}
+
+/// Is this an I/O error we can safely skip past without aborting the whole archive?
+/// PermissionDenied — typical for SIP-protected dirs on macOS, /proc/PID/mem on Linux,
+/// locked files on Windows. NotFound — file was deleted while the walk was running.
+fn is_skippable_io_error(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+    )
+}
+
+fn send_skip_tick(
+    tx: &Sender<BackupEvent>,
+    bytes_in: u64,
+    bytes_out_atom: &Arc<AtomicU64>,
+    reason: &str,
+    rel: &Path,
+) {
+    let _ = tx.send(BackupEvent::Tick {
+        bytes_in,
+        bytes_out: bytes_out_atom.load(Ordering::Relaxed),
+        current_file: Some(format!("skipped ({reason}): {}", rel.display())),
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk_and_archive<W: Write>(
     base: &Path,
@@ -278,8 +337,28 @@ fn walk_and_archive<W: Write>(
     tick_interval: Duration,
 ) -> Result<()> {
     let rel = path.strip_prefix(base).unwrap_or(path).to_path_buf();
-    let meta =
-        std::fs::symlink_metadata(path).map_err(|e| eyre!("stat {}: {}", path.display(), e))?;
+
+    // Hard-skip well-known system metadata directories. They're usually unreadable even
+    // under sudo (Spotlight ACLs on macOS) and aren't useful in a backup anyway.
+    if is_system_metadata(&rel) {
+        send_skip_tick(tx, *bytes_in, bytes_out_atom, "system metadata", &rel);
+        return Ok(());
+    }
+
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if is_skippable_io_error(&e) => {
+            send_skip_tick(
+                tx,
+                *bytes_in,
+                bytes_out_atom,
+                &format!("{}", e.kind()),
+                &rel,
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(eyre!("stat {}: {}", path.display(), e)),
+    };
 
     // Tick on file boundaries (but at most every tick_interval so we don't flood the
     // channel on trees with millions of tiny files).
@@ -294,15 +373,32 @@ fn walk_and_archive<W: Write>(
 
     if meta.file_type().is_dir() {
         if !rel.as_os_str().is_empty() {
-            builder
-                .append_dir(&rel, path)
-                .map_err(|e| eyre!("append_dir {}: {}", path.display(), e))?;
+            if let Err(e) = builder.append_dir(&rel, path) {
+                if let Some(io) = e.get_ref().and_then(|r| r.downcast_ref::<std::io::Error>()) {
+                    if is_skippable_io_error(io) {
+                        send_skip_tick(tx, *bytes_in, bytes_out_atom, "dir header", &rel);
+                        return Ok(());
+                    }
+                }
+                return Err(eyre!("append_dir {}: {}", path.display(), e));
+            }
         }
+        let read = match std::fs::read_dir(path) {
+            Ok(r) => r,
+            Err(e) if is_skippable_io_error(&e) => {
+                send_skip_tick(
+                    tx,
+                    *bytes_in,
+                    bytes_out_atom,
+                    &format!("{}", e.kind()),
+                    &rel,
+                );
+                return Ok(());
+            }
+            Err(e) => return Err(eyre!("read_dir {}: {}", path.display(), e)),
+        };
         let mut entries: Vec<PathBuf> = Vec::new();
-        for entry in std::fs::read_dir(path)
-            .map_err(|e| eyre!("read_dir {}: {}", path.display(), e))?
-            .flatten()
-        {
+        for entry in read.flatten() {
             entries.push(entry.path());
         }
         // Deterministic order so archive contents are reproducible.
@@ -321,12 +417,30 @@ fn walk_and_archive<W: Write>(
             )?;
         }
     } else if meta.file_type().is_symlink() {
-        builder
-            .append_path_with_name(path, &rel)
-            .map_err(|e| eyre!("append_symlink {}: {}", path.display(), e))?;
+        if let Err(e) = builder.append_path_with_name(path, &rel) {
+            if let Some(io) = e.get_ref().and_then(|r| r.downcast_ref::<std::io::Error>()) {
+                if is_skippable_io_error(io) {
+                    send_skip_tick(tx, *bytes_in, bytes_out_atom, "symlink", &rel);
+                    return Ok(());
+                }
+            }
+            return Err(eyre!("append_symlink {}: {}", path.display(), e));
+        }
     } else {
-        let f =
-            std::fs::File::open(path).map_err(|e| eyre!("open file {}: {}", path.display(), e))?;
+        let f = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) if is_skippable_io_error(&e) => {
+                send_skip_tick(
+                    tx,
+                    *bytes_in,
+                    bytes_out_atom,
+                    &format!("{}", e.kind()),
+                    &rel,
+                );
+                return Ok(());
+            }
+            Err(e) => return Err(eyre!("open file {}: {}", path.display(), e)),
+        };
         // Build a tar header from the file's metadata so append_data can stream the
         // contents through our counting/hashing reader (append_file would require
         // &mut File and bypass the wrapper).
@@ -337,9 +451,15 @@ fn walk_and_archive<W: Write>(
             bytes_in,
             hasher,
         };
-        builder
-            .append_data(&mut header, &rel, reader)
-            .map_err(|e| eyre!("append_data {}: {}", path.display(), e))?;
+        if let Err(e) = builder.append_data(&mut header, &rel, reader) {
+            if let Some(io) = e.get_ref().and_then(|r| r.downcast_ref::<std::io::Error>()) {
+                if is_skippable_io_error(io) {
+                    send_skip_tick(tx, *bytes_in, bytes_out_atom, "read", &rel);
+                    return Ok(());
+                }
+            }
+            return Err(eyre!("append_data {}: {}", path.display(), e));
+        }
     }
     Ok(())
 }
