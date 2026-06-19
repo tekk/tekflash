@@ -367,29 +367,25 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
                         // confirmation step needed because backup is non-destructive
                         // (read-only on the source device).
                         Action::Backup => {
+                            let original_source = state
+                                .devices
+                                .get(p.device_idx)
+                                .map(|d| d.path.clone())
+                                .unwrap_or_default();
+                            // Resolve to the per-OS fast device node before opening:
+                            // /dev/diskN → /dev/rdiskN on macOS (often 5–10× faster on
+                            // USB / SD because it bypasses the buffered block layer);
+                            // no-op on Linux and Windows.
+                            let fast_source =
+                                tekflash_core::device::resolve_fast_path(&original_source);
                             let total_bytes = state
                                 .devices
                                 .get(p.device_idx)
                                 .map(|d| d.size_bytes)
                                 .filter(|n| *n > 0)
-                                .or_else(|| {
-                                    std::fs::metadata(
-                                        state
-                                            .devices
-                                            .get(p.device_idx)
-                                            .map(|d| d.path.as_path())
-                                            .unwrap_or_else(|| std::path::Path::new("")),
-                                    )
-                                    .ok()
-                                    .map(|m| m.len())
-                                });
-                            let source = state
-                                .devices
-                                .get(p.device_idx)
-                                .map(|d| d.path.clone())
-                                .unwrap_or_default();
+                                .or_else(|| std::fs::metadata(&fast_source).ok().map(|m| m.len()));
                             let params = BackupParams {
-                                source,
+                                source: fast_source,
                                 dest: picked,
                                 codec: p.codec,
                                 level: p.level,

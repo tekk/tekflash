@@ -82,7 +82,10 @@ fn do_backup(
     bytes_out: Arc<AtomicU64>,
     tx: &Sender<BackupEvent>,
 ) -> Result<(u64, String)> {
-    let src = std::fs::File::open(&params.source)
+    // Open the source through the per-OS fast path: F_NOCACHE + F_RDAHEAD on macOS
+    // (combined with /dev/rdiskN that the caller already substituted in),
+    // posix_fadvise(SEQUENTIAL|NOREUSE) on Linux, FILE_FLAG_SEQUENTIAL_SCAN on Windows.
+    let src = tekflash_core::device::open_fast_read(&params.source)
         .map_err(|e| eyre!("open source {}: {}", params.source.display(), e))?;
     let dst = std::fs::File::create(&params.dest)
         .map_err(|e| eyre!("create dest {}: {}", params.dest.display(), e))?;
@@ -93,8 +96,11 @@ fn do_backup(
     let mut writer =
         encoder(params.codec, params.level, counter).map_err(|e| eyre!("init encoder: {}", e))?;
     let mut hasher = Hasher::new(HashKind::Blake3);
-    let mut src = std::io::BufReader::with_capacity(4 * 1024 * 1024, src);
-    let mut buf = vec![0u8; 4 * 1024 * 1024];
+    // Larger buffer = fewer syscalls and lets the kernel stream bigger DMA windows.
+    // 8 MiB amortizes per-syscall costs and is the sweet spot for USB 3.x / NVMe.
+    const BUF_BYTES: usize = 8 * 1024 * 1024;
+    let mut src = std::io::BufReader::with_capacity(BUF_BYTES, src);
+    let mut buf = vec![0u8; BUF_BYTES];
     let mut bytes_in: u64 = 0;
     let mut last_tick = Instant::now();
     let tick_interval = Duration::from_millis(150);
@@ -316,10 +322,8 @@ mod tests {
     fn backup_runner_finishes_and_reports_real_hash() {
         let payload: Vec<u8> = (0u32..400_000).map(|i| (i.wrapping_mul(7)) as u8).collect();
         let src = tempfile("src", &payload);
-        let dst = std::env::temp_dir().join(format!(
-            "tekflash-prog-dst-{}.zst",
-            std::process::id()
-        ));
+        let dst =
+            std::env::temp_dir().join(format!("tekflash-prog-dst-{}.zst", std::process::id()));
 
         let params = BackupParams {
             source: src.clone(),

@@ -95,6 +95,73 @@ pub fn enumerate(show_all: bool) -> color_eyre::Result<Vec<BlockDevice>> {
     Ok(safety::filter(all, show_all))
 }
 
+/// Translate a user-supplied device path into the per-OS *fastest* equivalent for raw
+/// I/O. On macOS this rewrites `/dev/diskN` → `/dev/rdiskN` (an order-of-magnitude
+/// faster on USB / SD because it bypasses the kernel's buffered block-device layer).
+/// On Linux and Windows the OS already has one canonical device node, so the original
+/// path is returned unchanged.
+pub fn resolve_fast_path(path: &std::path::Path) -> std::path::PathBuf {
+    backend::raw_path(path)
+}
+
+/// Open `path` for reading with the per-OS fast-path hints applied. Pair with
+/// [`resolve_fast_path`] when the caller wants the path rewrite too.
+///
+/// Hints applied:
+///
+/// - **macOS**: `F_NOCACHE` (don't pollute the page cache with a one-shot read of a
+///   whole device) and `F_RDAHEAD` (request kernel read-ahead). The combination is
+///   harmless on `/dev/rdiskN` (already unbuffered) and a significant win on regular
+///   files.
+/// - **Linux**: `posix_fadvise(SEQUENTIAL)` and `posix_fadvise(NOREUSE)` — tells the
+///   kernel to be aggressive with read-ahead and to drop pages quickly after use.
+///   `O_DIRECT` would bypass the cache entirely but requires sector-aligned buffers
+///   throughout the pipeline; that's a follow-up.
+/// - **Windows**: `FILE_FLAG_SEQUENTIAL_SCAN` at open time — the same intent.
+pub fn open_fast_read(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    #[cfg(windows)]
+    {
+        use std::fs::OpenOptions;
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
+        return OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN)
+            .open(path);
+    }
+    #[cfg(not(windows))]
+    {
+        let f = std::fs::File::open(path)?;
+        apply_unix_fast_read_hints(&f);
+        Ok(f)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_unix_fast_read_hints(f: &std::fs::File) {
+    use std::os::fd::AsRawFd;
+    // Both fcntls are best-effort — they return an error on file types that don't
+    // support them (e.g. pipes) and that's fine.
+    unsafe {
+        let fd = f.as_raw_fd();
+        let _ = libc::fcntl(fd, libc::F_NOCACHE, 1);
+        let _ = libc::fcntl(fd, libc::F_RDAHEAD, 1);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn apply_unix_fast_read_hints(f: &std::fs::File) {
+    use std::os::fd::AsRawFd;
+    unsafe {
+        let fd = f.as_raw_fd();
+        let _ = libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
+        let _ = libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_NOREUSE);
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+fn apply_unix_fast_read_hints(_f: &std::fs::File) {}
+
 fn format_bytes(n: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB", "PB"];
     let mut v = n as f64;
@@ -107,5 +174,41 @@ fn format_bytes(n: u64) -> String {
         format!("{} {}", n, UNITS[0])
     } else {
         format!("{:.1} {}", v, UNITS[idx])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn resolve_fast_path_returns_unrelated_paths_unchanged() {
+        let p = PathBuf::from("/tmp/definitely-not-a-block-device-2026");
+        assert_eq!(resolve_fast_path(&p), p);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn resolve_fast_path_rewrites_disk_to_rdisk_when_present() {
+        // /dev/disk0 (boot disk) and /dev/rdisk0 always exist on macOS.
+        let p = PathBuf::from("/dev/disk0");
+        let r = resolve_fast_path(&p);
+        assert_eq!(
+            r,
+            PathBuf::from("/dev/rdisk0"),
+            "expected /dev/disk0 → /dev/rdisk0, got {}",
+            r.display()
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn resolve_fast_path_passes_already_raw_paths_through() {
+        let p = PathBuf::from("/dev/rdisk0");
+        let r = resolve_fast_path(&p);
+        // The function doesn't recognize a "rdisk" prefix as needing further rewrite —
+        // it just returns the original path. (And rdiskrdisk0 wouldn't exist anyway.)
+        assert_eq!(r, p);
     }
 }
