@@ -1,6 +1,7 @@
-//! Home view: device table + action menu + status bar.
+//! Home view: device table + sessions panel + footer.
 
 use crate::tui::progress_runner::{BackupProgress, BackupStatus};
+use crate::tui::theme::Theme;
 use crate::tui::{layout::Mode, widgets, AppState};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -11,26 +12,30 @@ use ratatui::{
 };
 
 pub fn render(f: &mut Frame, area: Rect, mode: Mode, state: &AppState) {
-    let has_detached_backup = state.backup_progress.is_some() && state.backup_detached;
-    let banner_h: u16 = if has_detached_backup { 3 } else { 0 };
+    let session_count = state.sessions.len() as u16;
+    // 2 borders + 1 line per session, capped at 6 visible rows so the panel never
+    // squeezes the device table below its minimum.
+    let session_panel_h: u16 = if session_count == 0 {
+        0
+    } else {
+        (2 + session_count.min(6)).min(area.height.saturating_sub(13))
+    };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(banner_h),
             Constraint::Min(8),
+            Constraint::Length(session_panel_h),
             Constraint::Length(2),
         ])
         .split(area);
 
     render_header(f, chunks[0], state);
-    if has_detached_backup {
-        if let Some(p) = state.backup_progress.as_ref() {
-            render_backup_banner(f, chunks[1], p, &state.theme);
-        }
+    render_table(f, chunks[1], state, mode);
+    if session_panel_h > 0 {
+        render_sessions(f, chunks[2], state);
     }
-    render_table(f, chunks[2], state, mode);
     render_footer(f, chunks[3], state);
 }
 
@@ -60,58 +65,6 @@ fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
             .border_style(theme.muted_s()),
     );
     f.render_widget(p, area);
-}
-
-/// One-line summary of the detached backup with a "press b to resume" cue.
-fn render_backup_banner(
-    f: &mut Frame,
-    area: Rect,
-    p: &BackupProgress,
-    theme: &crate::tui::theme::Theme,
-) {
-    let (label, label_style, border_style): (&str, Style, Style) = match &p.status {
-        BackupStatus::Running => (" Backup running ", theme.success_s(), theme.success_s()),
-        BackupStatus::Finished { .. } => {
-            (" Backup finished ", theme.success_s(), theme.success_s())
-        }
-        BackupStatus::Failed { .. } => (" Backup failed ", theme.danger_s(), theme.danger_s()),
-    };
-
-    let pct = p
-        .fraction()
-        .map(|f| format!("{:.0}%", f * 100.0))
-        .unwrap_or_else(|| "—".to_string());
-    let rate = format!("{}/s", human_bytes(p.instant_rate as u64));
-    let dest = p
-        .params
-        .dest
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| p.params.dest.display().to_string());
-
-    let resume_cue = match &p.status {
-        BackupStatus::Running => "press Tab to resume",
-        BackupStatus::Finished { .. } => "press Tab to view summary",
-        BackupStatus::Failed { .. } => "press Tab for error details",
-    };
-
-    let line = Line::from(vec![
-        Span::styled(label, label_style),
-        Span::raw("  "),
-        Span::styled(format!("{} {pct}", human_bytes(p.bytes_in)), theme.body()),
-        Span::styled("  ·  ", theme.muted_s()),
-        Span::styled(rate, theme.body()),
-        Span::styled("  ·  ", theme.muted_s()),
-        Span::styled(format!("-> {dest}"), theme.body()),
-        Span::styled("  ·  ", theme.muted_s()),
-        Span::styled(resume_cue, theme.title()),
-    ]);
-    let widget = Paragraph::new(line).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style),
-    );
-    f.render_widget(widget, area);
 }
 
 fn render_table(f: &mut Frame, area: Rect, state: &AppState, _mode: Mode) {
@@ -175,18 +128,99 @@ fn render_table(f: &mut Frame, area: Rect, state: &AppState, _mode: Mode) {
     f.render_stateful_widget(table, area, &mut ts);
 }
 
+/// One mini progress row per session: status icon, bar, percentage, rate, destination
+/// filename. The block title shows the cycle-to-next-session hint.
+fn render_sessions(f: &mut Frame, area: Rect, state: &AppState) {
+    let theme = &state.theme;
+    let running = state.sessions.iter().filter(|s| s.is_running()).count();
+    let title = Line::from(vec![
+        Span::styled(" Sessions ", theme.title()),
+        Span::raw(" "),
+        Span::styled(
+            format!(
+                "{} running · {} total · Tab to view",
+                running,
+                state.sessions.len()
+            ),
+            theme.muted_s(),
+        ),
+    ]);
+
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let lines: Vec<Line<'_>> = state
+        .sessions
+        .iter()
+        .take(6) // see render() — we only allocate room for up to 6 rows
+        .enumerate()
+        .map(|(i, s)| session_line(i, s, inner_w, theme))
+        .collect();
+
+    let widget = Paragraph::new(lines).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(theme.muted_s()),
+    );
+    f.render_widget(widget, area);
+}
+
+fn session_line<'a>(idx: usize, s: &'a BackupProgress, inner_w: usize, theme: &Theme) -> Line<'a> {
+    let (icon, icon_style): (&str, Style) = match &s.status {
+        BackupStatus::Running => (" ▶", theme.success_s()),
+        BackupStatus::Finished { .. } => (" ✓", theme.success_s()),
+        BackupStatus::Failed { .. } => (" ✗", theme.danger_s()),
+    };
+    let ratio = s.fraction().unwrap_or(0.0);
+    let pct = format!("{:>3}%", (ratio * 100.0).round() as u32);
+    let rate = match &s.status {
+        BackupStatus::Running => format!("{}/s", human_bytes(s.instant_rate as u64)),
+        BackupStatus::Finished { .. } => "complete".to_string(),
+        BackupStatus::Failed { .. } => "failed".to_string(),
+    };
+    let dest = s
+        .params
+        .dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| s.params.dest.display().to_string());
+
+    // Compose: " ▶ [1] ████████░░ 72%  152 MB/s  -> dest.zst"
+    // Budget the bar to whatever's left after fixed-width fields.
+    let prefix = format!(" {icon} [{idx}]  ");
+    let suffix = format!("  {pct}  {rate:>12}  -> {dest}");
+    let bar_w = inner_w
+        .saturating_sub(prefix.chars().count())
+        .saturating_sub(suffix.chars().count())
+        .clamp(6, 40);
+    let bar = mini_bar(ratio, bar_w);
+    let bar_style = match &s.status {
+        BackupStatus::Failed { .. } => theme.danger_s(),
+        _ => theme.success_s(),
+    };
+
+    Line::from(vec![
+        Span::styled(format!(" {icon}"), icon_style),
+        Span::styled(format!(" [{idx}]  "), theme.muted_s()),
+        Span::styled(bar, bar_style),
+        Span::styled(format!("  {pct}  "), theme.body()),
+        Span::styled(format!("{rate:>12}"), theme.body()),
+        Span::styled("  -> ", theme.muted_s()),
+        Span::styled(dest, theme.body()),
+    ])
+}
+
 fn render_footer(f: &mut Frame, area: Rect, state: &AppState) {
     let theme = &state.theme;
     let mut keys: Vec<(&str, &str)> = vec![("↑↓", "select"), ("↵", "pick action")];
-    let has_detached = state.backup_progress.is_some() && state.backup_detached;
     keys.push(("a", "show-all"));
-    if has_detached {
-        // Tab switches to / resumes the detached session. The label adapts so the user
-        // can tell from the footer whether the backup is still running or it finished.
-        let label = match state.backup_progress.as_ref().map(|p| &p.status) {
-            Some(BackupStatus::Finished { .. }) => "view backup summary",
-            Some(BackupStatus::Failed { .. }) => "view backup error",
-            _ => "resume session",
+    if !state.sessions.is_empty() {
+        let running = state.sessions.iter().filter(|s| s.is_running()).count();
+        let label = if running == state.sessions.len() && running > 0 {
+            "view sessions"
+        } else if running > 0 {
+            "view sessions (some finished)"
+        } else {
+            "view finished sessions"
         };
         keys.push(("Tab", label));
     }
@@ -196,6 +230,19 @@ fn render_footer(f: &mut Frame, area: Rect, state: &AppState) {
     let line = widgets::footer_keys(theme, &keys);
     let p = Paragraph::new(line);
     f.render_widget(p, area);
+}
+
+fn mini_bar(ratio: f64, width: usize) -> String {
+    let filled = ((ratio.clamp(0.0, 1.0)) * width as f64).round() as usize;
+    let filled = filled.min(width);
+    let mut s = String::with_capacity(width * 3); // unicode blocks are 3 bytes
+    for _ in 0..filled {
+        s.push('█');
+    }
+    for _ in filled..width {
+        s.push('░');
+    }
+    s
 }
 
 fn human_bytes(n: u64) -> String {

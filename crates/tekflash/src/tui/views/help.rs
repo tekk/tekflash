@@ -32,8 +32,11 @@ pub fn overlay(f: &mut Frame, area: Rect, theme: &Theme) {
         ]),
         Line::from(vec![
             Span::styled("Tab", theme.title()),
-            Span::raw("        switch to a running session (resumes a detached backup)"),
+            Span::raw("        cycle through running sessions and back to the home view"),
         ]),
+        Line::from(vec![Span::raw(
+            "            (sessions keep running in the background when detached)",
+        )]),
         Line::from(vec![
             Span::styled("r", theme.title()),
             Span::raw("          refresh device list"),

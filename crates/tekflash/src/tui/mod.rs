@@ -47,8 +47,8 @@ pub async fn run(global: GlobalOpts) -> Result<()> {
         browser: None,
         browser_purpose: None,
         confirm: None,
-        backup_progress: None,
-        backup_detached: false,
+        sessions: Vec::new(),
+        viewing_session: None,
     };
 
     let result = event_loop(&mut term, &mut state).await;
@@ -87,11 +87,12 @@ pub struct AppState {
     pub browser: Option<FileBrowser>,
     pub browser_purpose: Option<BrowserPurpose>,
     pub confirm: Option<Confirm>,
-    pub backup_progress: Option<BackupProgress>,
-    /// User pressed Esc on the progress view while the worker is still running. The
-    /// progress is retained so the home view can show a status banner and the user can
-    /// resume it; the runner thread keeps streaming in the background.
-    pub backup_detached: bool,
+    /// Every running, finished, or failed backup session. New sessions are appended;
+    /// completed ones stay until the user dismisses them (Enter on the summary).
+    pub sessions: Vec<BackupProgress>,
+    /// Index into `sessions` of the one currently rendered full-screen. `None` means
+    /// the home view is shown and any sessions appear as mini bars at the bottom.
+    pub viewing_session: Option<usize>,
 }
 
 async fn event_loop<B: ratatui::backend::Backend>(
@@ -99,10 +100,10 @@ async fn event_loop<B: ratatui::backend::Backend>(
     state: &mut AppState,
 ) -> Result<()> {
     loop {
-        // Drain backup worker progress events before drawing so the gauge shows the
-        // freshest numbers we have for this frame.
-        if let Some(p) = state.backup_progress.as_mut() {
-            p.poll();
+        // Drain every session's progress events before drawing so the gauges and the
+        // home-view mini bars all show the freshest numbers we have for this frame.
+        for s in state.sessions.iter_mut() {
+            s.poll();
         }
 
         term.draw(|f| {
@@ -112,12 +113,11 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 return;
             }
 
-            // Progress view is its own full-screen view while a backup is running or
-            // has just finished. The user can press Esc to detach it — the runner
-            // keeps streaming, and a status banner on the home view lets them resume.
-            if let Some(p) = &state.backup_progress {
-                if !state.backup_detached {
-                    views::progress::render(f, area, p, &state.theme);
+            // Showing a specific session full-screen replaces every other view (with
+            // the keyboard help overlay as the only exception).
+            if let Some(idx) = state.viewing_session {
+                if let Some(s) = state.sessions.get(idx) {
+                    views::progress::render(f, area, s, &state.theme);
                     return;
                 }
             }
@@ -142,12 +142,8 @@ async fn event_loop<B: ratatui::backend::Backend>(
             }
         })?;
 
-        // Shorter poll while the backup is running so the rate readouts feel live.
-        let poll_ms = if state
-            .backup_progress
-            .as_ref()
-            .is_some_and(|p| p.is_running())
-        {
+        // Shorter poll while any session is running so the rate readouts feel live.
+        let poll_ms = if state.sessions.iter().any(|s| s.is_running()) {
             50
         } else {
             100
@@ -173,9 +169,9 @@ fn dispatch_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) -> bool
         return true;
     }
 
-    // While a backup is on screen, route keys to the progress handler. Once detached,
-    // it lives in the background and home-view keys take over again.
-    if state.backup_progress.is_some() && !state.backup_detached {
+    // While a session is on screen, route keys to the progress handler. The home view
+    // handles its own keys (including Tab to start cycling into the sessions).
+    if state.viewing_session.is_some() {
         return handle_progress_key(state, code);
     }
     if state.confirm.is_some() {
@@ -242,11 +238,11 @@ fn handle_home_key(state: &mut AppState, code: KeyCode) -> bool {
             false
         }
         KeyCode::Tab => {
-            // Switch to / resume a running session. We only support one concurrent
-            // backup today, so Tab simply resumes the detached view if there is one.
-            // Once multi-session lands, Tab will cycle through them.
-            if state.backup_progress.is_some() && state.backup_detached {
-                state.backup_detached = false;
+            // Start the session cycle: jump into the first session. Subsequent Tab
+            // presses (handled by handle_progress_key) walk forward through the
+            // list and eventually return to home.
+            if !state.sessions.is_empty() {
+                state.viewing_session = Some(0);
             }
             false
         }
@@ -410,7 +406,13 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
                                 level: p.level,
                                 total_bytes,
                             };
-                            state.backup_progress = Some(BackupProgress::new(p.device_idx, params));
+                            // Append the new session and jump into its full-screen
+                            // view. Concurrent backups land in the same vec; Tab
+                            // cycles through them from the home view.
+                            state
+                                .sessions
+                                .push(BackupProgress::new(p.device_idx, params));
+                            state.viewing_session = Some(state.sessions.len() - 1);
                         }
                         // Flash and Archive keep the confirm step.
                         Action::Flash | Action::Archive => {
@@ -435,32 +437,36 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
 fn handle_progress_key(state: &mut AppState, code: KeyCode) -> bool {
     match code {
         KeyCode::Esc | KeyCode::Char('q') => {
-            // Two cases:
-            //  - Worker still running: detach. The progress stays in AppState, the
-            //    home view shows a status banner, and `b` resumes the full view.
-            //  - Already finished or failed: drop the progress entirely (the user is
-            //    dismissing the summary).
-            let still_running = state
-                .backup_progress
-                .as_ref()
-                .is_some_and(|p| p.is_running());
-            if still_running {
-                state.backup_detached = true;
-            } else {
-                state.backup_progress = None;
-                state.backup_detached = false;
-            }
+            // Detach back to the home view. Sessions stay in the vec; the worker
+            // threads keep running, and the home view shows their mini bars.
+            state.viewing_session = None;
         }
         KeyCode::Enter => {
-            // Enter on a finished summary dismisses it (like Esc); on a running one
-            // it does nothing (avoids accidental detach if the user was just typing).
-            let still_running = state
-                .backup_progress
-                .as_ref()
-                .is_some_and(|p| p.is_running());
-            if !still_running {
-                state.backup_progress = None;
-                state.backup_detached = false;
+            // Enter on a finished / failed summary dismisses that session (removes
+            // it from the vec). On a running one Enter does nothing — avoids
+            // accidentally killing a session the user is watching.
+            let Some(idx) = state.viewing_session else {
+                return false;
+            };
+            let is_done = state.sessions.get(idx).is_some_and(|s| !s.is_running());
+            if is_done {
+                state.sessions.remove(idx);
+                state.viewing_session = if state.sessions.is_empty() {
+                    None
+                } else {
+                    Some(idx.min(state.sessions.len() - 1))
+                };
+            }
+        }
+        KeyCode::Tab => {
+            // Cycle to the next session, or back to the home view when past the end.
+            if let Some(idx) = state.viewing_session {
+                let next = idx + 1;
+                state.viewing_session = if next < state.sessions.len() {
+                    Some(next)
+                } else {
+                    None
+                };
             }
         }
         _ => {}
