@@ -118,6 +118,7 @@ fn render_footer(f: &mut Frame, area: Rect, state: &AppState) {
         theme,
         &[
             ("↑↓", "select"),
+            ("↵", "pick action"),
             ("Tab", "show-all"),
             ("r", "refresh"),
             ("?", "help"),
