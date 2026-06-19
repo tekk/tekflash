@@ -118,23 +118,22 @@ pub fn resolve_fast_path(path: &std::path::Path) -> std::path::PathBuf {
 ///   `O_DIRECT` would bypass the cache entirely but requires sector-aligned buffers
 ///   throughout the pipeline; that's a follow-up.
 /// - **Windows**: `FILE_FLAG_SEQUENTIAL_SCAN` at open time — the same intent.
+#[cfg(windows)]
 pub fn open_fast_read(path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    #[cfg(windows)]
-    {
-        use std::fs::OpenOptions;
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
-        return OpenOptions::new()
-            .read(true)
-            .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN)
-            .open(path);
-    }
-    #[cfg(not(windows))]
-    {
-        let f = std::fs::File::open(path)?;
-        apply_unix_fast_read_hints(&f);
-        Ok(f)
-    }
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN)
+        .open(path)
+}
+
+#[cfg(not(windows))]
+pub fn open_fast_read(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let f = std::fs::File::open(path)?;
+    apply_unix_fast_read_hints(&f);
+    Ok(f)
 }
 
 #[cfg(target_os = "macos")]
