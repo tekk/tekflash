@@ -1,26 +1,37 @@
 //! Home view: device table + action menu + status bar.
 
+use crate::tui::progress_runner::{BackupProgress, BackupStatus};
 use crate::tui::{layout::Mode, widgets, AppState};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
     Frame,
 };
 
 pub fn render(f: &mut Frame, area: Rect, mode: Mode, state: &AppState) {
+    let has_detached_backup = state.backup_progress.is_some() && state.backup_detached;
+    let banner_h: u16 = if has_detached_backup { 3 } else { 0 };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
+            Constraint::Length(banner_h),
             Constraint::Min(8),
             Constraint::Length(2),
         ])
         .split(area);
 
     render_header(f, chunks[0], state);
-    render_table(f, chunks[1], state, mode);
-    render_footer(f, chunks[2], state);
+    if has_detached_backup {
+        if let Some(p) = state.backup_progress.as_ref() {
+            render_backup_banner(f, chunks[1], p, &state.theme);
+        }
+    }
+    render_table(f, chunks[2], state, mode);
+    render_footer(f, chunks[3], state);
 }
 
 fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
@@ -49,6 +60,58 @@ fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
             .border_style(theme.muted_s()),
     );
     f.render_widget(p, area);
+}
+
+/// One-line summary of the detached backup with a "press b to resume" cue.
+fn render_backup_banner(
+    f: &mut Frame,
+    area: Rect,
+    p: &BackupProgress,
+    theme: &crate::tui::theme::Theme,
+) {
+    let (label, label_style, border_style): (&str, Style, Style) = match &p.status {
+        BackupStatus::Running => (" Backup running ", theme.success_s(), theme.success_s()),
+        BackupStatus::Finished { .. } => {
+            (" Backup finished ", theme.success_s(), theme.success_s())
+        }
+        BackupStatus::Failed { .. } => (" Backup failed ", theme.danger_s(), theme.danger_s()),
+    };
+
+    let pct = p
+        .fraction()
+        .map(|f| format!("{:.0}%", f * 100.0))
+        .unwrap_or_else(|| "—".to_string());
+    let rate = format!("{}/s", human_bytes(p.instant_rate as u64));
+    let dest = p
+        .params
+        .dest
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| p.params.dest.display().to_string());
+
+    let resume_cue = match &p.status {
+        BackupStatus::Running => "press b to resume",
+        BackupStatus::Finished { .. } => "press b to view summary",
+        BackupStatus::Failed { .. } => "press b for error details",
+    };
+
+    let line = Line::from(vec![
+        Span::styled(label, label_style),
+        Span::raw("  "),
+        Span::styled(format!("{} {pct}", human_bytes(p.bytes_in)), theme.body()),
+        Span::styled("  ·  ", theme.muted_s()),
+        Span::styled(rate, theme.body()),
+        Span::styled("  ·  ", theme.muted_s()),
+        Span::styled(format!("-> {dest}"), theme.body()),
+        Span::styled("  ·  ", theme.muted_s()),
+        Span::styled(resume_cue, theme.title()),
+    ]);
+    let widget = Paragraph::new(line).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style),
+    );
+    f.render_widget(widget, area);
 }
 
 fn render_table(f: &mut Frame, area: Rect, state: &AppState, _mode: Mode) {
@@ -114,17 +177,37 @@ fn render_table(f: &mut Frame, area: Rect, state: &AppState, _mode: Mode) {
 
 fn render_footer(f: &mut Frame, area: Rect, state: &AppState) {
     let theme = &state.theme;
-    let line = widgets::footer_keys(
-        theme,
-        &[
-            ("↑↓", "select"),
-            ("↵", "pick action"),
-            ("Tab", "show-all"),
-            ("r", "refresh"),
-            ("?", "help"),
-            ("q", "quit"),
-        ],
-    );
+    let mut keys: Vec<(&str, &str)> = vec![("↑↓", "select"), ("↵", "pick action")];
+    // Surface the resume shortcut as a first-class menu item whenever a backup is
+    // running (or finished) in the background.
+    if state.backup_progress.is_some() && state.backup_detached {
+        let label = match state.backup_progress.as_ref().map(|p| &p.status) {
+            Some(BackupStatus::Finished { .. }) => "view backup summary",
+            Some(BackupStatus::Failed { .. }) => "view backup error",
+            _ => "resume backup",
+        };
+        keys.push(("b", label));
+    }
+    keys.push(("Tab", "show-all"));
+    keys.push(("r", "refresh"));
+    keys.push(("?", "help"));
+    keys.push(("q", "quit"));
+    let line = widgets::footer_keys(theme, &keys);
     let p = Paragraph::new(line);
     f.render_widget(p, area);
+}
+
+fn human_bytes(n: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut idx = 0;
+    while v >= 1000.0 && idx + 1 < UNITS.len() {
+        v /= 1000.0;
+        idx += 1;
+    }
+    if idx == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[idx])
+    }
 }

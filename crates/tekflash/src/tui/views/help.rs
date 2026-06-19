@@ -38,6 +38,10 @@ pub fn overlay(f: &mut Frame, area: Rect, theme: &Theme) {
             Span::styled("F2", theme.title()),
             Span::raw("         open the file browser at the focused field"),
         ]),
+        Line::from(vec![
+            Span::styled("b", theme.title()),
+            Span::raw("          resume a backup that you detached with Esc"),
+        ]),
         Line::from(""),
         Line::from(Span::styled(" File browser ", theme.title())),
         Line::from(""),

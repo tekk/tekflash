@@ -48,6 +48,7 @@ pub async fn run(global: GlobalOpts) -> Result<()> {
         browser_purpose: None,
         confirm: None,
         backup_progress: None,
+        backup_detached: false,
     };
 
     let result = event_loop(&mut term, &mut state).await;
@@ -87,6 +88,10 @@ pub struct AppState {
     pub browser_purpose: Option<BrowserPurpose>,
     pub confirm: Option<Confirm>,
     pub backup_progress: Option<BackupProgress>,
+    /// User pressed Esc on the progress view while the worker is still running. The
+    /// progress is retained so the home view can show a status banner and the user can
+    /// resume it; the runner thread keeps streaming in the background.
+    pub backup_detached: bool,
 }
 
 async fn event_loop<B: ratatui::backend::Backend>(
@@ -108,11 +113,13 @@ async fn event_loop<B: ratatui::backend::Backend>(
             }
 
             // Progress view is its own full-screen view while a backup is running or
-            // has just finished. Browser fully replaces home; everything else is a
-            // modal overlay.
+            // has just finished. The user can press Esc to detach it — the runner
+            // keeps streaming, and a status banner on the home view lets them resume.
             if let Some(p) = &state.backup_progress {
-                views::progress::render(f, area, p, &state.theme);
-                return;
+                if !state.backup_detached {
+                    views::progress::render(f, area, p, &state.theme);
+                    return;
+                }
             }
             if let Some(browser) = &state.browser {
                 views::file_browser::render(f, area, browser, &state.theme);
@@ -166,7 +173,9 @@ fn dispatch_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) -> bool
         return true;
     }
 
-    if state.backup_progress.is_some() {
+    // While a backup is on screen, route keys to the progress handler. Once detached,
+    // it lives in the background and home-view keys take over again.
+    if state.backup_progress.is_some() && !state.backup_detached {
         return handle_progress_key(state, code);
     }
     if state.confirm.is_some() {
@@ -210,6 +219,13 @@ fn handle_home_key(state: &mut AppState, code: KeyCode) -> bool {
         KeyCode::Enter => {
             if !state.devices.is_empty() {
                 state.action_picker = Some(ActionPicker::new(state.selected));
+            }
+            false
+        }
+        KeyCode::Char('b') => {
+            // Resume the detached backup view if one is in the background.
+            if state.backup_progress.is_some() && state.backup_detached {
+                state.backup_detached = false;
             }
             false
         }
@@ -415,12 +431,34 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
 
 fn handle_progress_key(state: &mut AppState, code: KeyCode) -> bool {
     match code {
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
-            // Dropping the progress state detaches the channel; the worker thread keeps
-            // running in the background until completion (Rust's thread::JoinHandle is
-            // dropped here, which detaches it). Once cancellation lands the runner will
-            // know to bail; until then this is the safest behavior.
-            state.backup_progress = None;
+        KeyCode::Esc | KeyCode::Char('q') => {
+            // Two cases:
+            //  - Worker still running: detach. The progress stays in AppState, the
+            //    home view shows a status banner, and `b` resumes the full view.
+            //  - Already finished or failed: drop the progress entirely (the user is
+            //    dismissing the summary).
+            let still_running = state
+                .backup_progress
+                .as_ref()
+                .is_some_and(|p| p.is_running());
+            if still_running {
+                state.backup_detached = true;
+            } else {
+                state.backup_progress = None;
+                state.backup_detached = false;
+            }
+        }
+        KeyCode::Enter => {
+            // Enter on a finished summary dismisses it (like Esc); on a running one
+            // it does nothing (avoids accidental detach if the user was just typing).
+            let still_running = state
+                .backup_progress
+                .as_ref()
+                .is_some_and(|p| p.is_running());
+            if !still_running {
+                state.backup_progress = None;
+                state.backup_detached = false;
+            }
         }
         _ => {}
     }
