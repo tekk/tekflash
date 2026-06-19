@@ -301,20 +301,25 @@ fn render_block_map(f: &mut Frame, area: Rect, p: &BackupProgress, theme: &Theme
 }
 
 fn render_status(f: &mut Frame, area: Rect, p: &BackupProgress, theme: &Theme) {
+    let kind = p.params.kind.human();
     let (text, style) = match &p.status {
         BackupStatus::Running => (
-            "Backup is streaming. Press Esc to detach (the worker keeps running in the background).".to_string(),
+            format!(
+                "{kind} is streaming. Press Esc to detach (the worker keeps running in the background)."
+            ),
             theme.muted_s(),
         ),
         BackupStatus::Finished { hash_hex, elapsed } => (
             format!(
-                "Backup OK in {}.  BLAKE3 = {}",
+                "{kind} OK in {}.  BLAKE3 = {}",
                 format_duration(*elapsed),
                 short_hash(hash_hex)
             ),
             theme.success_s(),
         ),
-        BackupStatus::Failed { message } => (format!("Backup FAILED: {message}"), theme.danger_s()),
+        BackupStatus::Failed { message } => {
+            (format!("{kind} FAILED: {message}"), theme.danger_s())
+        }
     };
     let p_widget = Paragraph::new(Line::from(Span::styled(text, style)))
         .alignment(Alignment::Left)

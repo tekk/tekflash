@@ -104,6 +104,25 @@ pub fn resolve_fast_path(path: &std::path::Path) -> std::path::PathBuf {
     backend::raw_path(path)
 }
 
+/// Best-effort mount of a block device so the caller can read its filesystem (used by
+/// the archive worker when the source isn't yet a directory).
+///
+/// On macOS this shells out to `diskutil mountDisk` and returns the resulting
+/// mountpoint. On Linux and Windows the OS auto-mounts in most cases; we surface a
+/// clear error rather than guess at fstab / drive-letter logic from inside tekflash.
+#[cfg(target_os = "macos")]
+pub fn try_mount(device_path: &std::path::Path) -> crate::Result<std::path::PathBuf> {
+    backend::try_mount(device_path)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn try_mount(device_path: &std::path::Path) -> crate::Result<std::path::PathBuf> {
+    Err(color_eyre::eyre::eyre!(
+        "auto-mount is only supported on macOS today; mount {} via your OS first",
+        device_path.display()
+    ))
+}
+
 /// Open `path` for reading with the per-OS fast-path hints applied. Pair with
 /// [`resolve_fast_path`] when the caller wants the path rewrite too.
 ///

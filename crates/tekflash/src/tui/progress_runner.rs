@@ -175,17 +175,42 @@ fn do_archive(
     bytes_out: Arc<AtomicU64>,
     tx: &Sender<BackupEvent>,
 ) -> Result<(u64, String)> {
+    // Resolve the source to an actual directory we can walk. The TUI normally hands us
+    // a mountpoint (e.g. /Volumes/MyDrive), but if the device has no mountpoint we get
+    // the device node itself (e.g. /dev/disk5). In that case try to mount it; on
+    // failure return a clear error so the user can act on it.
+    let source = if params.source.is_dir() {
+        params.source.clone()
+    } else if params.source.to_string_lossy().starts_with("/dev/") {
+        let _ = tx.send(BackupEvent::Tick {
+            bytes_in: 0,
+            bytes_out: 0,
+            current_file: Some(format!("mounting {}…", params.source.display())),
+        });
+        tekflash_core::device::try_mount(&params.source).map_err(|e| {
+            eyre!(
+                "source {} isn't a directory and could not be mounted: {e}",
+                params.source.display()
+            )
+        })?
+    } else {
+        return Err(eyre!(
+            "source {} is not a directory; archive needs a mounted filesystem",
+            params.source.display()
+        ));
+    };
+
     // Phase 1: walk the tree once to learn the total source size. This unlocks a
     // meaningful percentage and ETA in the UI; it usually finishes in a second or two
     // even for trees with tens of thousands of files.
-    let total = precompute_total_bytes(&params.source);
+    let total = precompute_total_bytes(&source);
     let _ = tx.send(BackupEvent::Started { total_bytes: total });
     // Initial Tick so the UI shows the source and "starting…" right away even when
     // the archive completes in a few milliseconds (e.g. a tiny tree).
     let _ = tx.send(BackupEvent::Tick {
         bytes_in: 0,
         bytes_out: 0,
-        current_file: Some(format!("opening {}", params.source.display())),
+        current_file: Some(format!("opening {}", source.display())),
     });
 
     let dst = std::fs::File::create(&params.dest)
@@ -205,8 +230,8 @@ fn do_archive(
     let tick_interval = Duration::from_millis(150);
 
     walk_and_archive(
-        &params.source,
-        &params.source,
+        &source,
+        &source,
         &mut builder,
         &mut hasher,
         &mut bytes_in,
