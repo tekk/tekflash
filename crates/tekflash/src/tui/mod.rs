@@ -378,9 +378,8 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
                 let purpose = state.browser_purpose.take();
                 if let Some(p) = purpose {
                     match p.action {
-                        // Backup starts immediately with a live progress view — no
-                        // confirmation step needed because backup is non-destructive
-                        // (read-only on the source device).
+                        // Backup and Archive both start immediately with a live
+                        // progress view — both are read-only on the source side.
                         Action::Backup => {
                             let original_source = state
                                 .devices
@@ -400,22 +399,49 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
                                 .filter(|n| *n > 0)
                                 .or_else(|| std::fs::metadata(&fast_source).ok().map(|m| m.len()));
                             let params = BackupParams {
+                                kind: progress_runner::OperationKind::Backup,
                                 source: fast_source,
                                 dest: picked,
                                 codec: p.codec,
                                 level: p.level,
                                 total_bytes,
                             };
-                            // Append the new session and jump into its full-screen
-                            // view. Concurrent backups land in the same vec; Tab
-                            // cycles through them from the home view.
                             state
                                 .sessions
                                 .push(BackupProgress::new(p.device_idx, params));
                             state.viewing_session = Some(state.sessions.len() - 1);
                         }
-                        // Flash and Archive keep the confirm step.
-                        Action::Flash | Action::Archive => {
+                        Action::Archive => {
+                            // Archive reads files from a mounted directory, so the
+                            // source is a mountpoint of the chosen device. If the
+                            // device isn't mounted the worker reports the failure
+                            // through the same UI as a normal session.
+                            let source = state
+                                .devices
+                                .get(p.device_idx)
+                                .and_then(|d| d.mountpoints.first().cloned())
+                                .unwrap_or_else(|| {
+                                    state
+                                        .devices
+                                        .get(p.device_idx)
+                                        .map(|d| d.path.clone())
+                                        .unwrap_or_default()
+                                });
+                            let params = BackupParams {
+                                kind: progress_runner::OperationKind::Archive,
+                                source,
+                                dest: picked,
+                                codec: p.codec,
+                                level: p.level,
+                                total_bytes: None, // worker walks the tree and reports it
+                            };
+                            state
+                                .sessions
+                                .push(BackupProgress::new(p.device_idx, params));
+                            state.viewing_session = Some(state.sessions.len() - 1);
+                        }
+                        // Flash keeps the confirm step (it's the destructive direction).
+                        Action::Flash => {
                             state.confirm = Some(Confirm::new(p.action, p.device_idx, picked));
                             if let Some(c) = state.confirm.as_mut() {
                                 c.codec = Some(p.codec);

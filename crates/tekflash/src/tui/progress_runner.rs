@@ -8,7 +8,7 @@
 
 use color_eyre::eyre::{eyre, Result};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -17,21 +17,51 @@ use std::time::{Duration, Instant};
 use tekflash_core::pipeline::compress::{encoder, Codec, CompressionLevel};
 use tekflash_core::pipeline::hasher::{HashKind, Hasher};
 
+/// Which kind of operation this session represents. The worker dispatches on this; the
+/// UI uses it to pick titles, icons, and which extra fields to render (current file,
+/// etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationKind {
+    /// Bit-exact backup of a block device into a compressed image file.
+    Backup,
+    /// File-level tar archive of a mounted directory.
+    Archive,
+}
+
+impl OperationKind {
+    pub fn human(self) -> &'static str {
+        match self {
+            OperationKind::Backup => "Backup",
+            OperationKind::Archive => "Archive",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BackupParams {
+    pub kind: OperationKind,
     pub source: PathBuf,
     pub dest: PathBuf,
     pub codec: Codec,
     pub level: CompressionLevel,
-    /// Total bytes of the source if known (block device size or file length).
+    /// Total bytes of the source if known (block device size, file length, or, for
+    /// archives, the sum of all file sizes after the worker walks the tree).
     pub total_bytes: Option<u64>,
 }
 
 #[derive(Debug)]
 pub enum BackupEvent {
+    /// Worker has finished a tree walk and can now report the true source size. Backups
+    /// usually know this upfront; archives discover it.
+    Started {
+        total_bytes: u64,
+    },
     Tick {
         bytes_in: u64,
         bytes_out: u64,
+        /// Currently-being-processed file, relative to the source root. Set by the
+        /// archive worker; `None` for backups.
+        current_file: Option<String>,
     },
     Finished {
         bytes_in: u64,
@@ -44,8 +74,10 @@ pub enum BackupEvent {
     },
 }
 
-/// Spawn the backup worker and return the channel + a handle to the OS thread + a live
-/// `bytes_out` counter the UI can poll between ticks for smoother gauge updates.
+/// Spawn the worker and return the channel + a handle to the OS thread + a live
+/// `bytes_out` counter the UI can poll between ticks for smoother gauge updates. The
+/// worker dispatches on `params.kind` to either the block-device backup loop or the
+/// file-tree archive walk.
 pub fn spawn_backup(
     params: BackupParams,
 ) -> (Arc<AtomicU64>, Receiver<BackupEvent>, JoinHandle<()>) {
@@ -53,10 +85,14 @@ pub fn spawn_backup(
     let bytes_out_worker = bytes_out.clone();
     let (tx, rx) = mpsc::channel();
     let handle = std::thread::Builder::new()
-        .name("tekflash-backup".to_string())
+        .name("tekflash-session".to_string())
         .spawn(move || {
             let started = Instant::now();
-            match do_backup(&params, bytes_out_worker.clone(), &tx) {
+            let result = match params.kind {
+                OperationKind::Backup => do_backup(&params, bytes_out_worker.clone(), &tx),
+                OperationKind::Archive => do_archive(&params, bytes_out_worker.clone(), &tx),
+            };
+            match result {
                 Ok((bytes_in, hash)) => {
                     let bytes_out_final = bytes_out_worker.load(Ordering::Relaxed);
                     let _ = tx.send(BackupEvent::Finished {
@@ -73,7 +109,7 @@ pub fn spawn_backup(
                 }
             }
         })
-        .expect("spawn backup thread");
+        .expect("spawn session thread");
     (bytes_out, rx, handle)
 }
 
@@ -120,6 +156,7 @@ fn do_backup(
             let _ = tx.send(BackupEvent::Tick {
                 bytes_in,
                 bytes_out: bytes_out.load(Ordering::Relaxed),
+                current_file: None,
             });
             last_tick = Instant::now();
         }
@@ -127,6 +164,176 @@ fn do_backup(
     // Drop the encoder to flush trailers (zstd auto_finish, lz4 finish_on_drop, etc.).
     drop(writer);
     Ok((bytes_in, hasher.finalize_hex()))
+}
+
+/// Walk a directory tree, tar-stream its contents through the chosen codec, and emit
+/// progress events including the currently-being-processed file. The hash captured is
+/// BLAKE3 over the *concatenated file contents in tar order* — that's the canonical
+/// "what was archived" digest and matches what restore would see on read-back.
+fn do_archive(
+    params: &BackupParams,
+    bytes_out: Arc<AtomicU64>,
+    tx: &Sender<BackupEvent>,
+) -> Result<(u64, String)> {
+    // Phase 1: walk the tree once to learn the total source size. This unlocks a
+    // meaningful percentage and ETA in the UI; it usually finishes in a second or two
+    // even for trees with tens of thousands of files.
+    let total = precompute_total_bytes(&params.source);
+    let _ = tx.send(BackupEvent::Started { total_bytes: total });
+    // Initial Tick so the UI shows the source and "starting…" right away even when
+    // the archive completes in a few milliseconds (e.g. a tiny tree).
+    let _ = tx.send(BackupEvent::Tick {
+        bytes_in: 0,
+        bytes_out: 0,
+        current_file: Some(format!("opening {}", params.source.display())),
+    });
+
+    let dst = std::fs::File::create(&params.dest)
+        .map_err(|e| eyre!("create dest {}: {}", params.dest.display(), e))?;
+    let counter = ByteCounter {
+        inner: dst,
+        bytes: bytes_out.clone(),
+    };
+    let writer =
+        encoder(params.codec, params.level, counter).map_err(|e| eyre!("init encoder: {}", e))?;
+    let mut builder = ::tar::Builder::new(writer);
+    builder.follow_symlinks(false);
+
+    let mut hasher = Hasher::new(HashKind::Blake3);
+    let mut bytes_in: u64 = 0;
+    let mut last_tick = Instant::now();
+    let tick_interval = Duration::from_millis(150);
+
+    walk_and_archive(
+        &params.source,
+        &params.source,
+        &mut builder,
+        &mut hasher,
+        &mut bytes_in,
+        &bytes_out,
+        tx,
+        &mut last_tick,
+        tick_interval,
+    )?;
+
+    builder.finish().map_err(|e| eyre!("finalize tar: {}", e))?;
+    Ok((bytes_in, hasher.finalize_hex()))
+}
+
+fn precompute_total_bytes(root: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let Ok(meta) = std::fs::symlink_metadata(&p) else {
+            continue;
+        };
+        if meta.file_type().is_dir() {
+            if let Ok(rd) = std::fs::read_dir(&p) {
+                for e in rd.flatten() {
+                    stack.push(e.path());
+                }
+            }
+        } else if !meta.file_type().is_symlink() {
+            total += meta.len();
+        }
+    }
+    total
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_and_archive<W: Write>(
+    base: &Path,
+    path: &Path,
+    builder: &mut ::tar::Builder<W>,
+    hasher: &mut Hasher,
+    bytes_in: &mut u64,
+    bytes_out_atom: &Arc<AtomicU64>,
+    tx: &Sender<BackupEvent>,
+    last_tick: &mut Instant,
+    tick_interval: Duration,
+) -> Result<()> {
+    let rel = path.strip_prefix(base).unwrap_or(path).to_path_buf();
+    let meta =
+        std::fs::symlink_metadata(path).map_err(|e| eyre!("stat {}: {}", path.display(), e))?;
+
+    // Tick on file boundaries (but at most every tick_interval so we don't flood the
+    // channel on trees with millions of tiny files).
+    if last_tick.elapsed() >= tick_interval {
+        let _ = tx.send(BackupEvent::Tick {
+            bytes_in: *bytes_in,
+            bytes_out: bytes_out_atom.load(Ordering::Relaxed),
+            current_file: Some(rel.display().to_string()),
+        });
+        *last_tick = Instant::now();
+    }
+
+    if meta.file_type().is_dir() {
+        if !rel.as_os_str().is_empty() {
+            builder
+                .append_dir(&rel, path)
+                .map_err(|e| eyre!("append_dir {}: {}", path.display(), e))?;
+        }
+        let mut entries: Vec<PathBuf> = Vec::new();
+        for entry in std::fs::read_dir(path)
+            .map_err(|e| eyre!("read_dir {}: {}", path.display(), e))?
+            .flatten()
+        {
+            entries.push(entry.path());
+        }
+        // Deterministic order so archive contents are reproducible.
+        entries.sort();
+        for child in entries {
+            walk_and_archive(
+                base,
+                &child,
+                builder,
+                hasher,
+                bytes_in,
+                bytes_out_atom,
+                tx,
+                last_tick,
+                tick_interval,
+            )?;
+        }
+    } else if meta.file_type().is_symlink() {
+        builder
+            .append_path_with_name(path, &rel)
+            .map_err(|e| eyre!("append_symlink {}: {}", path.display(), e))?;
+    } else {
+        let f =
+            std::fs::File::open(path).map_err(|e| eyre!("open file {}: {}", path.display(), e))?;
+        // Build a tar header from the file's metadata so append_data can stream the
+        // contents through our counting/hashing reader (append_file would require
+        // &mut File and bypass the wrapper).
+        let mut header = ::tar::Header::new_gnu();
+        header.set_metadata(&meta);
+        let reader = CountingHashingReader {
+            inner: f,
+            bytes_in,
+            hasher,
+        };
+        builder
+            .append_data(&mut header, &rel, reader)
+            .map_err(|e| eyre!("append_data {}: {}", path.display(), e))?;
+    }
+    Ok(())
+}
+
+/// Per-file reader that counts bytes read into `bytes_in` and updates the BLAKE3
+/// hasher in lockstep. Borrows both mutably, so it's scoped to a single file's read.
+struct CountingHashingReader<'a, R: Read> {
+    inner: R,
+    bytes_in: &'a mut u64,
+    hasher: &'a mut Hasher,
+}
+
+impl<R: Read> Read for CountingHashingReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        *self.bytes_in += n as u64;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
 }
 
 /// Pass-through writer that atomically counts bytes for live UI display.
@@ -158,6 +365,9 @@ pub struct BackupProgress {
     pub bytes_out: u64,
     pub instant_rate: f64, // bytes/s based on last tick
     pub status: BackupStatus,
+    /// Set by the archive worker; the home view shows this in the mini bar and the
+    /// progress view shows it as its own row in the stats panel.
+    pub current_file: Option<String>,
 
     /// Live counter that the worker writes through `ByteCounter` — the UI can poll this
     /// between Tick events to refresh the compressed-size column at 60 Hz.
@@ -188,6 +398,7 @@ impl BackupProgress {
             bytes_out: 0,
             instant_rate: 0.0,
             status: BackupStatus::Running,
+            current_file: None,
             bytes_out_live: bytes_out,
             rx,
             join_handle: Some(handle),
@@ -203,9 +414,16 @@ impl BackupProgress {
         let mut changed = false;
         loop {
             match self.rx.try_recv() {
+                Ok(BackupEvent::Started { total_bytes }) => {
+                    // Archive worker reports the true total after walking the tree.
+                    // Backup ignores Started — total_bytes is known upfront.
+                    self.params.total_bytes = Some(total_bytes);
+                    changed = true;
+                }
                 Ok(BackupEvent::Tick {
                     bytes_in,
                     bytes_out,
+                    current_file,
                 }) => {
                     let dt = self.last_tick_at.elapsed().as_secs_f64().max(1e-3);
                     self.instant_rate = (bytes_in - self.last_bytes_in_at_tick) as f64 / dt;
@@ -213,6 +431,9 @@ impl BackupProgress {
                     self.last_tick_at = Instant::now();
                     self.bytes_in = bytes_in;
                     self.bytes_out = bytes_out;
+                    if current_file.is_some() {
+                        self.current_file = current_file;
+                    }
                     changed = true;
                 }
                 Ok(BackupEvent::Finished {
@@ -326,6 +547,7 @@ mod tests {
             std::env::temp_dir().join(format!("tekflash-prog-dst-{}.zst", std::process::id()));
 
         let params = BackupParams {
+            kind: OperationKind::Backup,
             source: src.clone(),
             dest: dst.clone(),
             codec: Codec::Zstd,
@@ -366,10 +588,69 @@ mod tests {
     }
 
     #[test]
+    fn archive_runner_walks_a_small_tree_and_reports_current_file() {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("tekflash-arch-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(root.join("subdir")).unwrap();
+        std::fs::write(root.join("alpha.txt"), b"alpha contents").unwrap();
+        std::fs::write(root.join("subdir").join("beta.txt"), b"beta beta beta beta").unwrap();
+        let dst = root.with_extension("tar.zst");
+
+        let params = BackupParams {
+            kind: OperationKind::Archive,
+            source: root.clone(),
+            dest: dst.clone(),
+            codec: Codec::Zstd,
+            level: CompressionLevel(3),
+            total_bytes: None,
+        };
+        let mut prog = BackupProgress::new(0, params);
+        let mut saw_current_file = false;
+
+        let started = Instant::now();
+        loop {
+            prog.poll();
+            if prog.current_file.is_some() {
+                saw_current_file = true;
+            }
+            if !prog.is_running() {
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                panic!("archive never finished");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        match &prog.status {
+            BackupStatus::Finished { .. } => {}
+            other => panic!("expected Finished, got {other:?}"),
+        }
+        assert!(prog.bytes_in > 0, "expected non-zero bytes_in");
+        assert!(prog.bytes_out > 0, "expected non-zero bytes_out");
+        assert!(
+            prog.params.total_bytes.is_some(),
+            "Started should have populated total_bytes"
+        );
+        assert!(
+            saw_current_file,
+            "archive worker must report current_file at least once"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(dst);
+    }
+
+    #[test]
     fn fraction_eta_and_ratio_only_compute_when_inputs_make_sense() {
         let mut prog = BackupProgress {
             device_idx: 0,
             params: BackupParams {
+                kind: OperationKind::Backup,
                 source: PathBuf::from("/dev/null"),
                 dest: PathBuf::from("/tmp/never"),
                 codec: Codec::Zstd,
@@ -381,6 +662,7 @@ mod tests {
             bytes_out: 0,
             instant_rate: 0.0,
             status: BackupStatus::Running,
+            current_file: None,
             bytes_out_live: Arc::new(AtomicU64::new(0)),
             rx: std::sync::mpsc::channel().1,
             join_handle: None,

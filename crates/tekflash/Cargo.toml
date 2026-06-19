@@ -33,6 +33,8 @@ clap = { version = "4.5", features = ["derive", "wrap_help", "env"] }
 ratatui = { version = "0.28", default-features = false, features = ["crossterm"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
 
+tar = { workspace = true }
+
 time = { workspace = true }
 dirs = { workspace = true }
 hostname = { workspace = true }

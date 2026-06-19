@@ -13,7 +13,7 @@
 //! enough; on a 24-row terminal it gracefully collapses to a thinner band so the rest
 //! of the panel still fits.
 
-use crate::tui::progress_runner::{BackupProgress, BackupStatus};
+use crate::tui::progress_runner::{BackupProgress, BackupStatus, OperationKind};
 use crate::tui::theme::Theme;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -60,10 +60,11 @@ pub fn render(f: &mut Frame, area: Rect, p: &BackupProgress, theme: &Theme) {
 }
 
 fn render_header(f: &mut Frame, area: Rect, p: &BackupProgress, theme: &Theme) {
+    let kind = p.params.kind.human();
     let title = match &p.status {
-        BackupStatus::Running => " Backup running ",
-        BackupStatus::Finished { .. } => " Backup finished ",
-        BackupStatus::Failed { .. } => " Backup failed ",
+        BackupStatus::Running => format!(" {kind} running "),
+        BackupStatus::Finished { .. } => format!(" {kind} finished "),
+        BackupStatus::Failed { .. } => format!(" {kind} failed "),
     };
     let title_style = match &p.status {
         BackupStatus::Running => theme.title(),
@@ -167,6 +168,12 @@ fn render_stats(f: &mut Frame, area: Rect, p: &BackupProgress, theme: &Theme) {
                 .unwrap_or_else(|| "—".to_string()),
         ),
     ];
+    // Archive workers report the currently-being-processed file. Show it prominently
+    // — that's what makes the screen feel "interactive" for tar walks.
+    if p.params.kind == OperationKind::Archive {
+        let current = p.current_file.as_deref().unwrap_or("walking source tree…");
+        left_lines.push(labelled(theme, "current    ", truncate_left(current, 56)));
+    }
     if let BackupStatus::Finished { hash_hex, .. } = &p.status {
         left_lines.push(labelled(theme, "BLAKE3     ", short_hash(hash_hex)));
     }
@@ -386,5 +393,17 @@ fn short_hash(h: &str) -> String {
         h.to_string()
     } else {
         format!("{}…{}", &h[..12], &h[h.len() - 12..])
+    }
+}
+
+/// Keep the rightmost `max` characters of a path-like string (so the filename stays
+/// visible even when the full path is too long for the panel).
+fn truncate_left(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        s.to_string()
+    } else {
+        let tail: String = chars[chars.len() - (max - 1)..].iter().collect();
+        format!("…{tail}")
     }
 }

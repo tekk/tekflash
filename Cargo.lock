@@ -1588,6 +1588,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "tar",
  "tekflash-core",
  "thiserror 2.0.18",
  "time",
