@@ -1,6 +1,7 @@
 //! TUI entry point. Single-event-loop app over crossterm + ratatui.
 
 pub mod layout;
+pub mod progress_runner;
 pub mod theme;
 pub mod views;
 pub mod widgets;
@@ -14,6 +15,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use progress_runner::{BackupParams, BackupProgress};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::stdout;
 use std::time::Duration;
@@ -45,6 +47,7 @@ pub async fn run(global: GlobalOpts) -> Result<()> {
         browser: None,
         browser_purpose: None,
         confirm: None,
+        backup_progress: None,
     };
 
     let result = event_loop(&mut term, &mut state).await;
@@ -83,6 +86,7 @@ pub struct AppState {
     pub browser: Option<FileBrowser>,
     pub browser_purpose: Option<BrowserPurpose>,
     pub confirm: Option<Confirm>,
+    pub backup_progress: Option<BackupProgress>,
 }
 
 async fn event_loop<B: ratatui::backend::Backend>(
@@ -90,6 +94,12 @@ async fn event_loop<B: ratatui::backend::Backend>(
     state: &mut AppState,
 ) -> Result<()> {
     loop {
+        // Drain backup worker progress events before drawing so the gauge shows the
+        // freshest numbers we have for this frame.
+        if let Some(p) = state.backup_progress.as_mut() {
+            p.poll();
+        }
+
         term.draw(|f| {
             let area = f.area();
             if area.width < 80 || area.height < 24 {
@@ -97,7 +107,13 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 return;
             }
 
-            // Browser fully replaces the base view; the rest are modal overlays on home.
+            // Progress view is its own full-screen view while a backup is running or
+            // has just finished. Browser fully replaces home; everything else is a
+            // modal overlay.
+            if let Some(p) = &state.backup_progress {
+                views::progress::render(f, area, p, &state.theme);
+                return;
+            }
             if let Some(browser) = &state.browser {
                 views::file_browser::render(f, area, browser, &state.theme);
                 return;
@@ -119,7 +135,17 @@ async fn event_loop<B: ratatui::backend::Backend>(
             }
         })?;
 
-        if event::poll(Duration::from_millis(100))? {
+        // Shorter poll while the backup is running so the rate readouts feel live.
+        let poll_ms = if state
+            .backup_progress
+            .as_ref()
+            .is_some_and(|p| p.is_running())
+        {
+            50
+        } else {
+            100
+        };
+        if event::poll(Duration::from_millis(poll_ms))? {
             match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press => {
                     if dispatch_key(state, k.code, k.modifiers) {
@@ -140,6 +166,9 @@ fn dispatch_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) -> bool
         return true;
     }
 
+    if state.backup_progress.is_some() {
+        return handle_progress_key(state, code);
+    }
     if state.confirm.is_some() {
         return handle_confirm_key(state, code);
     }
@@ -333,10 +362,49 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
                 state.browser = None;
                 let purpose = state.browser_purpose.take();
                 if let Some(p) = purpose {
-                    state.confirm = Some(Confirm::new(p.action, p.device_idx, picked));
-                    if let Some(c) = state.confirm.as_mut() {
-                        c.codec = Some(p.codec);
-                        c.level = Some(p.level);
+                    match p.action {
+                        // Backup starts immediately with a live progress view — no
+                        // confirmation step needed because backup is non-destructive
+                        // (read-only on the source device).
+                        Action::Backup => {
+                            let total_bytes = state
+                                .devices
+                                .get(p.device_idx)
+                                .map(|d| d.size_bytes)
+                                .filter(|n| *n > 0)
+                                .or_else(|| {
+                                    std::fs::metadata(
+                                        state
+                                            .devices
+                                            .get(p.device_idx)
+                                            .map(|d| d.path.as_path())
+                                            .unwrap_or_else(|| std::path::Path::new("")),
+                                    )
+                                    .ok()
+                                    .map(|m| m.len())
+                                });
+                            let source = state
+                                .devices
+                                .get(p.device_idx)
+                                .map(|d| d.path.clone())
+                                .unwrap_or_default();
+                            let params = BackupParams {
+                                source,
+                                dest: picked,
+                                codec: p.codec,
+                                level: p.level,
+                                total_bytes,
+                            };
+                            state.backup_progress = Some(BackupProgress::new(p.device_idx, params));
+                        }
+                        // Flash and Archive keep the confirm step.
+                        Action::Flash | Action::Archive => {
+                            state.confirm = Some(Confirm::new(p.action, p.device_idx, picked));
+                            if let Some(c) = state.confirm.as_mut() {
+                                c.codec = Some(p.codec);
+                                c.level = Some(p.level);
+                            }
+                        }
                     }
                 }
             }
@@ -347,6 +415,20 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Char(c) => browser.accept_char(c),
         _ => {}
     }
+}
+
+fn handle_progress_key(state: &mut AppState, code: KeyCode) -> bool {
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+            // Dropping the progress state detaches the channel; the worker thread keeps
+            // running in the background until completion (Rust's thread::JoinHandle is
+            // dropped here, which detaches it). Once cancellation lands the runner will
+            // know to bail; until then this is the safest behavior.
+            state.backup_progress = None;
+        }
+        _ => {}
+    }
+    false
 }
 
 fn handle_confirm_key(state: &mut AppState, code: KeyCode) -> bool {
