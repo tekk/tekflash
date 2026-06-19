@@ -18,6 +18,7 @@ use ratatui::{
 };
 use std::path::PathBuf;
 use tekflash_core::device::BlockDevice;
+use tekflash_core::pipeline::compress::{Codec, CompressionLevel};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmFocus {
@@ -31,6 +32,9 @@ pub struct Confirm {
     pub device_idx: usize,
     pub file: PathBuf,
     pub focus: ConfirmFocus,
+    /// Compression codec chosen for backup/archive. None for flash.
+    pub codec: Option<Codec>,
+    pub level: Option<CompressionLevel>,
     /// Result of the previous run, if any. Lets the user re-trigger or see what happened
     /// without losing the modal.
     pub result_message: Option<String>,
@@ -46,6 +50,8 @@ impl Confirm {
             device_idx,
             file,
             focus,
+            codec: None,
+            level: None,
             result_message: None,
         }
     }
@@ -121,6 +127,17 @@ pub fn render(f: &mut Frame, area: Rect, confirm: &Confirm, device: &BlockDevice
             Span::raw(mounts),
         ]),
     ];
+    if let (Some(codec), Some(level)) = (confirm.codec, confirm.level) {
+        let level_str = if matches!(codec, Codec::None | Codec::Lz4) {
+            "—".to_string()
+        } else {
+            level.0.to_string()
+        };
+        lines.push(Line::from(vec![
+            Span::styled("codec  : ", theme.muted_s()),
+            Span::raw(format!("{}  (level {level_str})", codec.human())),
+        ]));
+    }
     if device.is_system {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(

@@ -38,6 +38,37 @@ pub fn overlay(f: &mut Frame, area: Rect, theme: &Theme) {
             Span::styled("F2", theme.title()),
             Span::raw("         open the file browser at the focused field"),
         ]),
+        Line::from(""),
+        Line::from(Span::styled(" File browser ", theme.title())),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("type", theme.title()),
+            Span::raw("       Open: type-ahead filter (case-insensitive)"),
+        ]),
+        Line::from(vec![
+            Span::styled("type", theme.title()),
+            Span::raw("       Save: type the output filename; auto-extension shown in grey"),
+        ]),
+        Line::from(vec![
+            Span::styled("Backspace", theme.title()),
+            Span::raw("  pop a typed character, or go up one directory"),
+        ]),
+        Line::from(vec![
+            Span::styled("..", theme.title()),
+            Span::raw("         row at the top of every listing — Enter to go up"),
+        ]),
+        Line::from(vec![
+            Span::styled(".", theme.title()),
+            Span::raw("          (Save mode) Enter to commit the save in the current dir"),
+        ]),
+        Line::from(vec![
+            Span::styled("Ctrl-H", theme.title()),
+            Span::raw("     toggle hidden files"),
+        ]),
+        Line::from(vec![
+            Span::styled("Tab", theme.title()),
+            Span::raw("        toggle showing every file type (not just flashables)"),
+        ]),
         Line::from(vec![
             Span::styled("? / F1", theme.title()),
             Span::raw("     toggle this help overlay"),
