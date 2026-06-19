@@ -751,7 +751,7 @@ mod tests {
         let mut b = FileBrowser::open(d.clone(), BrowseMode::Open);
         // After the ".." row, real entries land alphabetically: Bravo, alpha, charlie, delta
         // (default sort puts dirs first; here everything is a file so they're sorted by
-        // ASCII — capital letters first). We assert by matching: typing "b" → focuses Bravo.
+        // ASCII — capital letters first). We assert by matching: typing "b" -> focuses Bravo.
         b.accept_char('b');
         assert_eq!(b.focused().unwrap().name, "Bravo");
         b.accept_char('r');
@@ -764,11 +764,11 @@ mod tests {
         let d = tempdir("bs");
         populate(&d, &["a"]);
         let mut b = FileBrowser::open(d.clone(), BrowseMode::Open);
-        assert!(!b.backspace(), "empty filter → caller should go_parent");
+        assert!(!b.backspace(), "empty filter -> caller should go_parent");
         b.accept_char('a');
         assert!(
             b.backspace(),
-            "non-empty filter → just popped, no go_parent"
+            "non-empty filter -> just popped, no go_parent"
         );
         assert!(b.filter.is_empty());
         std::fs::remove_dir_all(&d).ok();
@@ -800,7 +800,7 @@ mod tests {
         for c in "backup.img.gz".chars() {
             b.accept_char(c);
         }
-        // User typed a known suffix → leave alone, don't make backup.img.gz.img.zst
+        // User typed a known suffix -> leave alone, don't make backup.img.gz.img.zst
         assert_eq!(b.composed_save_name(), "backup.img.gz");
         std::fs::remove_dir_all(&d).ok();
     }
@@ -815,11 +815,11 @@ mod tests {
         );
         b.accept_char('a');
         b.accept_char('b');
-        assert!(b.backspace(), "non-empty save_name → just popped");
+        assert!(b.backspace(), "non-empty save_name -> just popped");
         assert_eq!(b.save_name, "a");
         assert!(b.backspace());
         assert!(b.save_name.is_empty());
-        assert!(!b.backspace(), "empty save_name → caller should go_parent");
+        assert!(!b.backspace(), "empty save_name -> caller should go_parent");
         std::fs::remove_dir_all(&d).ok();
     }
 

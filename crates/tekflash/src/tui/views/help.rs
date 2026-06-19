@@ -24,7 +24,7 @@ pub fn overlay(f: &mut Frame, area: Rect, theme: &Theme) {
         ]),
         Line::from(vec![
             Span::styled("Enter", theme.title()),
-            Span::raw("      pick the highlighted device → Flash / Backup / Archive"),
+            Span::raw("      pick the highlighted device -> Flash / Backup / Archive"),
         ]),
         Line::from(vec![
             Span::styled("Tab", theme.title()),

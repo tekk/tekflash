@@ -84,12 +84,12 @@ pub fn render(f: &mut Frame, area: Rect, confirm: &Confirm, device: &BlockDevice
     let direction_line = match confirm.action {
         Action::Flash => Line::from(vec![
             Span::styled(confirm.file.display().to_string(), theme.body()),
-            Span::styled("   →   ", theme.title()),
+            Span::styled("   ->   ", theme.title()),
             Span::styled(device.path.display().to_string(), theme.danger_s()),
         ]),
         Action::Backup | Action::Archive => Line::from(vec![
             Span::styled(device.path.display().to_string(), theme.body()),
-            Span::styled("   →   ", theme.title()),
+            Span::styled("   ->   ", theme.title()),
             Span::styled(confirm.file.display().to_string(), theme.body()),
         ]),
     };
@@ -203,7 +203,7 @@ pub fn render(f: &mut Frame, area: Rect, confirm: &Confirm, device: &BlockDevice
             .borders(Borders::ALL)
             .border_style(theme.muted_s())
             .title(Line::from(Span::styled(
-                " ←/→ choose · ↵ activate · Esc cancel ",
+                " ←/-> choose · ↵ activate · Esc cancel ",
                 theme.muted_s(),
             ))),
     );

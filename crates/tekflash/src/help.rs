@@ -9,7 +9,7 @@ USAGE (macOS / Linux):
     sudo tekflash                            launch the TUI
     sudo tekflash <SUBCOMMAND> [OPTIONS]     scriptable mode
 
-USAGE (Windows 11+, elevated PowerShell or 'Run as administrator'):
+USAGE (Windows, elevated PowerShell or 'Run as administrator'):
     tekflash                                 launch the TUI
     tekflash <SUBCOMMAND> [OPTIONS]          scriptable mode
 
@@ -66,7 +66,7 @@ EXAMPLES:
     # Headless / CI mode — NDJSON progress events
     sudo tekflash flash ubuntu.iso /dev/sdb --no-tui --json | jq -c
 
-    # Windows 11 (elevated PowerShell) — same command, native physical-drive path
+    # Windows (elevated PowerShell) — same command, native physical-drive path
     tekflash flash ubuntu-24.04.iso \\\\.\\PhysicalDrive2 --verify=full
     # or by drive-letter syntax (resolved to the physical drive):
     tekflash flash ubuntu-24.04.iso E: --verify=full

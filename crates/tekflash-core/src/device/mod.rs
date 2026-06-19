@@ -96,7 +96,7 @@ pub fn enumerate(show_all: bool) -> color_eyre::Result<Vec<BlockDevice>> {
 }
 
 /// Translate a user-supplied device path into the per-OS *fastest* equivalent for raw
-/// I/O. On macOS this rewrites `/dev/diskN` → `/dev/rdiskN` (an order-of-magnitude
+/// I/O. On macOS this rewrites `/dev/diskN` -> `/dev/rdiskN` (an order-of-magnitude
 /// faster on USB / SD because it bypasses the kernel's buffered block-device layer).
 /// On Linux and Windows the OS already has one canonical device node, so the original
 /// path is returned unchanged.
@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(
             r,
             PathBuf::from("/dev/rdisk0"),
-            "expected /dev/disk0 → /dev/rdisk0, got {}",
+            "expected /dev/disk0 -> /dev/rdisk0, got {}",
             r.display()
         );
     }

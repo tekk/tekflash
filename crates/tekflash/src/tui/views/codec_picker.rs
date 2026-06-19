@@ -337,7 +337,7 @@ pub fn render(f: &mut Frame, area: Rect, picker: &CodecPicker, theme: &Theme) {
         theme,
         &[
             ("↑↓", "choose codec"),
-            ("←→ or -/+", "adjust level"),
+            ("←-> or -/+", "adjust level"),
             ("0/9", "min/max"),
             ("↵", "next"),
             ("Esc", "cancel"),
@@ -417,12 +417,12 @@ mod tests {
     #[test]
     fn per_codec_levels_are_independent() {
         let mut p = CodecPicker::new(Action::Backup, 0);
-        p.jump_max(); // zstd → 22
-        p.move_down(); // → lz4
-        p.move_down(); // → brotli
-        p.jump_max(); // brotli → 11
-        p.move_up(); // → lz4 (no level — clamped to 0)
-        p.move_up(); // → zstd
+        p.jump_max(); // zstd -> 22
+        p.move_down(); // -> lz4
+        p.move_down(); // -> brotli
+        p.jump_max(); // brotli -> 11
+        p.move_up(); // -> lz4 (no level — clamped to 0)
+        p.move_up(); // -> zstd
         assert_eq!(p.current_level(), 22, "zstd should remember its choice");
     }
 

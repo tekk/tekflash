@@ -78,7 +78,7 @@ pub fn encoder<'a, W: std::io::Write + Send + 'a>(
             writer,
         )))),
         Codec::Brotli => {
-            // brotli quality 0-11. Map level 0-22 → 0-11.
+            // brotli quality 0-11. Map level 0-22 -> 0-11.
             let q = (level.0.clamp(0, 22) * 11 / 22) as u32;
             Box::new(brotli::CompressorWriter::new(writer, 4096, q, 22))
         }

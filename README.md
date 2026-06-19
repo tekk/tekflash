@@ -1,13 +1,13 @@
 # tekflash
 
 A safe, fast, cross-platform TUI for flashing, backing up, and restoring block devices —
-SD cards, USB sticks, and other removable media — on macOS, Linux, and Windows 11+.
+SD cards, USB sticks, and other removable media — on macOS, Linux, and Windows.
 
 [![asciicast](https://asciinema.org/a/T2lK4nTDnpQ5VNWk.svg)](https://asciinema.org/a/T2lK4nTDnpQ5VNWk)
 
 > Status: early development. The workspace builds, the CLI surface and TUI shell are
 > in place, and the following pipelines are wired and unit-tested end-to-end on macOS,
-> Linux, and Windows 11+:
+> Linux, and Windows:
 >
 > - **flash** — streams from any of `.iso / .img / .bin / .raw / .img.{zst,zsd,zstd,xz,gz,bz2,lz4,br}`
 >   (magic-byte detected, extension as a fallback) to a target with optional `--verify=full`.
@@ -19,14 +19,14 @@ SD cards, USB sticks, and other removable media — on macOS, Linux, and Windows
 > - **verify** — bytewise compare against a source file; reports first-mismatch offset.
 > - **list** — JSON or table device enumeration (macOS `diskutil`, Linux `lsblk`,
 >   Windows `Get-Disk`).
-> - **PQ-safe password encryption** — Argon2id (m=256 MiB, t=3, p=4) → ChaCha20-Poly1305
+> - **PQ-safe password encryption** — Argon2id (m=256 MiB, t=3, p=4) -> ChaCha20-Poly1305
 >   framed AEAD; truncation/reordering/bit-flips all fail authentication.
 > - **TUI shell** — vivid dark + light palettes (truecolor / 256 / 16 / mono tiers),
 >   responsive layouts down to 80×24, ASCII fallback for VT consoles, device table,
 >   file browser (F2), help overlay (?).
 >
 > Multi-target flash, sampled/deferred verify modes, ML-KEM recipient mode, and the
-> full TUI flow connecting browser → flash/backup/restore are landing in follow-up
+> full TUI flow connecting browser -> flash/backup/restore are landing in follow-up
 > commits.
 
 ## Features (planned & in-progress)
@@ -38,7 +38,7 @@ SD cards, USB sticks, and other removable media — on macOS, Linux, and Windows
 - **Cross-platform raw-disk access**
   - macOS: opens `/dev/rdiskN` (unbuffered raw) with `/dev/diskN` fallback.
   - Linux: opens `/dev/sdX` (and on the flash path, with `O_DIRECT`).
-  - Windows 11+: opens `\\.\PhysicalDriveN` with
+  - Windows: opens `\\.\PhysicalDriveN` with
     `FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH`, auto-locks and dismounts child
     volumes (`FSCTL_LOCK_VOLUME` + `FSCTL_DISMOUNT_VOLUME`) before write.
 - **Flash from many formats** — `.iso`, `.img`, `.bin`, `.raw`, `.img.{zst,zsd,zstd,xz,gz,bz2,lz4,br}` —
@@ -48,7 +48,7 @@ SD cards, USB sticks, and other removable media — on macOS, Linux, and Windows
 - **File-level `.tar.zst` archive** of a mounted device, preserving extended attributes,
   ACLs, ownership, hidden files.
 - **Optional post-quantum encryption**
-  - Password mode: Argon2id → ChaCha20-Poly1305 (256-bit, PQ-safe under Grover).
+  - Password mode: Argon2id -> ChaCha20-Poly1305 (256-bit, PQ-safe under Grover).
   - Recipient mode: ML-KEM-768 (FIPS 203 Kyber) wraps the data key.
 - **Verify after write** — opt-in re-read with BLAKE3 compare. Full / sampled / deferred
   modes. Uses per-OS cache-bypass (`fsync`+`BLKFLSBUF`+`O_DIRECT` on Linux,
@@ -60,13 +60,33 @@ SD cards, USB sticks, and other removable media — on macOS, Linux, and Windows
 - **Two modes:** TUI (default) and scriptable CLI with `--no-tui --json` NDJSON output.
 - **Comprehensive `--help`** — every subcommand ships at least six worked examples.
 
-## Install (from source)
+## Install
+
+### Via cargo (from source)
 
 ```sh
-cargo install --git https://github.com/tekk/tekflash --bin tekflash
+# Prereq: a recent stable Rust toolchain (rustc 1.82+). If you don't have one:
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install the latest tekflash from main into ~/.cargo/bin/tekflash
+cargo install --git https://github.com/tekk/tekflash --bin tekflash --locked
+
+# Or pin to a released tag for a reproducible install
+cargo install --git https://github.com/tekk/tekflash --tag v0.0.1 --bin tekflash --locked
+
+# Verify
+tekflash --version
+sudo tekflash --check        # macOS / Linux: confirms elevated capability
 ```
 
-Or pre-built binaries are attached to each [release](https://github.com/tekk/tekflash/releases).
+`--locked` uses the committed `Cargo.lock` so transitive dependency versions match
+what was tested in CI. Drop it if you want the freshest deps.
+
+### Pre-built binaries
+
+Static binaries are attached to each [release](https://github.com/tekk/tekflash/releases)
+for `x86_64`/`aarch64` Linux musl, `x86_64`/`aarch64` macOS, and `x86_64`/`aarch64`
+Windows MSVC.
 
 ## Quick start
 
@@ -86,7 +106,7 @@ sudo tekflash archive /Volumes/MyDisk backup.tar.zst --encrypt password
 # Run `sudo tekflash <subcommand> --help` for many more worked examples.
 ```
 
-On Windows 11, run from an elevated PowerShell (or right-click → Run as administrator)
+On Windows, run from an elevated PowerShell (or right-click -> Run as administrator)
 without `sudo`. Device paths look like `\\.\PhysicalDrive2` or just `E:`.
 
 ## Building

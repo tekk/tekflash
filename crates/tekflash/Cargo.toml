@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "TUI for flashing, backing up, and restoring block devices safely (macOS / Linux / Windows 11+)"
+description = "TUI for flashing, backing up, and restoring block devices safely (macOS / Linux / Windows)"
 default-run = "tekflash"
 
 [[bin]]

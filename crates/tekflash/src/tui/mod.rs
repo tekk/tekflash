@@ -373,7 +373,7 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
                                 .map(|d| d.path.clone())
                                 .unwrap_or_default();
                             // Resolve to the per-OS fast device node before opening:
-                            // /dev/diskN → /dev/rdiskN on macOS (often 5–10× faster on
+                            // /dev/diskN -> /dev/rdiskN on macOS (often 5–10× faster on
                             // USB / SD because it bypasses the buffered block layer);
                             // no-op on Linux and Windows.
                             let fast_source =

@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn password_roundtrips_multi_frame_payload() {
-        // 64 KiB > one 16 KiB frame → forces multi-frame path.
+        // 64 KiB > one 16 KiB frame -> forces multi-frame path.
         let payload: Vec<u8> = (0u32..65_000).map(|i| (i & 0xff) as u8).collect();
         let env = encrypt_password(b"pw", fast_params(), &payload).unwrap();
         let back = decrypt_password(b"pw", &env).unwrap();

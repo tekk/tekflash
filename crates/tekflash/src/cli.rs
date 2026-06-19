@@ -9,7 +9,7 @@ use tekflash_core::pipeline::compress::{Codec, CompressionLevel};
 #[command(
     name = "tekflash",
     version,
-    about = "Flash, back up, and restore block devices safely (macOS / Linux / Windows 11+)",
+    about = "Flash, back up, and restore block devices safely (macOS / Linux / Windows)",
     after_help = crate::help::TOP_AFTER,
     after_long_help = crate::help::TOP_AFTER_LONG,
     propagate_version = true,

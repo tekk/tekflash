@@ -61,7 +61,7 @@ const fn unix_advice() -> &'static str {
     {
         "Try:  sudo tekflash\n\
          On macOS you may also need to grant your terminal 'Full Disk Access' in\n\
-         System Settings → Privacy & Security if reads from /dev/rdiskN fail with EPERM."
+         System Settings -> Privacy & Security if reads from /dev/rdiskN fail with EPERM."
     }
     #[cfg(target_os = "linux")]
     {

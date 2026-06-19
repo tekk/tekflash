@@ -2,7 +2,7 @@
 //!
 //! Layout (top to bottom):
 //!
-//! - header banner with title + source → destination
+//! - header banner with title + source -> destination
 //! - gauge with bytes-read / total + percentage
 //! - two-column stats panel (Stream / Throughput)
 //! - block-device matrix map — each cell ≈ `total / cells` bytes, shaded by progress
@@ -74,7 +74,7 @@ fn render_header(f: &mut Frame, area: Rect, p: &BackupProgress, theme: &Theme) {
         Span::styled(title, title_style),
         Span::raw("  "),
         Span::styled(p.params.source.display().to_string(), theme.body()),
-        Span::styled("  →  ", theme.title()),
+        Span::styled("  ->  ", theme.title()),
         Span::styled(p.params.dest.display().to_string(), theme.body()),
     ]))
     .block(

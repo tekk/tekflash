@@ -165,7 +165,7 @@ fn root_device_name() -> Option<String> {
     }
     let source = String::from_utf8(out.stdout).ok()?;
     let source = source.trim();
-    // Walk pkname chain (LVM/dm/luks → underlying disk).
+    // Walk pkname chain (LVM/dm/luks -> underlying disk).
     let pk = Command::new("lsblk")
         .args(["-n", "-o", "PKNAME", source])
         .output()
@@ -176,7 +176,7 @@ fn root_device_name() -> Option<String> {
             return Some(name.lines().next().unwrap_or("").to_string());
         }
     }
-    // Fall back to the source basename (e.g. /dev/sda1 → sda1 → strip trailing digits).
+    // Fall back to the source basename (e.g. /dev/sda1 -> sda1 -> strip trailing digits).
     let base = std::path::Path::new(source)
         .file_name()
         .and_then(|s| s.to_str())?
