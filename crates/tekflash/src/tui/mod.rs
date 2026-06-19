@@ -242,7 +242,22 @@ fn handle_home_key(state: &mut AppState, code: KeyCode) -> bool {
             false
         }
         KeyCode::Tab => {
-            state.show_all = !state.show_all;
+            // Cycle behavior:
+            //  - No backup detached  : toggle show-all (current behavior).
+            //  - Backup detached, currently removable-only : reveal all drives first.
+            //  - Backup detached, currently show-all       : resume the backup view
+            //                                                 and reset to removable-only.
+            let has_detached = state.backup_progress.is_some() && state.backup_detached;
+            if has_detached {
+                if !state.show_all {
+                    state.show_all = true;
+                } else {
+                    state.backup_detached = false;
+                    state.show_all = false;
+                }
+            } else {
+                state.show_all = !state.show_all;
+            }
             state.devices = tekflash_core::device::enumerate(state.show_all).unwrap_or_default();
             state.selected = state.selected.min(state.devices.len().saturating_sub(1));
             false

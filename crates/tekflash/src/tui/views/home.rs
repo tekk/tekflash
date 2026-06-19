@@ -178,9 +178,10 @@ fn render_table(f: &mut Frame, area: Rect, state: &AppState, _mode: Mode) {
 fn render_footer(f: &mut Frame, area: Rect, state: &AppState) {
     let theme = &state.theme;
     let mut keys: Vec<(&str, &str)> = vec![("↑↓", "select"), ("↵", "pick action")];
+    let has_detached = state.backup_progress.is_some() && state.backup_detached;
     // Surface the resume shortcut as a first-class menu item whenever a backup is
     // running (or finished) in the background.
-    if state.backup_progress.is_some() && state.backup_detached {
+    if has_detached {
         let label = match state.backup_progress.as_ref().map(|p| &p.status) {
             Some(BackupStatus::Finished { .. }) => "view backup summary",
             Some(BackupStatus::Failed { .. }) => "view backup error",
@@ -188,7 +189,17 @@ fn render_footer(f: &mut Frame, area: Rect, state: &AppState) {
         };
         keys.push(("b", label));
     }
-    keys.push(("Tab", "show-all"));
+    // Tab cycles: removable -> show-all -> resume backup, when a backup is detached.
+    let tab_label = if has_detached {
+        if state.show_all {
+            "resume backup"
+        } else {
+            "show-all then resume"
+        }
+    } else {
+        "show-all"
+    };
+    keys.push(("Tab", tab_label));
     keys.push(("r", "refresh"));
     keys.push(("?", "help"));
     keys.push(("q", "quit"));

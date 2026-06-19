@@ -28,8 +28,13 @@ pub fn overlay(f: &mut Frame, area: Rect, theme: &Theme) {
         ]),
         Line::from(vec![
             Span::styled("Tab", theme.title()),
-            Span::raw("        toggle showing internal/system disks"),
+            Span::raw(
+                "        toggle showing internal/system disks; with a detached backup, cycles",
+            ),
         ]),
+        Line::from(vec![Span::raw(
+            "            removable -> show-all -> resume backup",
+        )]),
         Line::from(vec![
             Span::styled("r", theme.title()),
             Span::raw("          refresh device list"),
