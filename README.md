@@ -3,6 +3,8 @@
 A safe, fast, cross-platform TUI for flashing, backing up, and restoring block devices —
 SD cards, USB sticks, and other removable media — on macOS, Linux, and Windows 11+.
 
+[![asciicast](https://asciinema.org/a/T2lK4nTDnpQ5VNWk.svg)](https://asciinema.org/a/T2lK4nTDnpQ5VNWk)
+
 > Status: early development. The workspace builds, the CLI surface and TUI shell are
 > in place, and the following pipelines are wired and unit-tested end-to-end on macOS,
 > Linux, and Windows 11+:
