@@ -1,5 +1,16 @@
 # tekflash
 
+[![CI](https://img.shields.io/github/actions/workflow/status/tekk/tekflash/ci.yml?branch=main&label=ci&logo=github)](https://github.com/tekk/tekflash/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/actions/workflow/status/tekk/tekflash/release.yml?label=release&logo=github)](https://github.com/tekk/tekflash/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/tekk/tekflash?logo=github&sort=semver)](https://github.com/tekk/tekflash/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/tekk/tekflash/total?logo=github)](https://github.com/tekk/tekflash/releases)
+[![License](https://img.shields.io/github/license/tekk/tekflash)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.82%2B-orange?logo=rust)](https://www.rust-lang.org)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-blue)](https://github.com/tekk/tekflash/releases/latest)
+[![Stars](https://img.shields.io/github/stars/tekk/tekflash?style=flat&logo=github)](https://github.com/tekk/tekflash/stargazers)
+[![Issues](https://img.shields.io/github/issues/tekk/tekflash?logo=github)](https://github.com/tekk/tekflash/issues)
+[![Last commit](https://img.shields.io/github/last-commit/tekk/tekflash?logo=github)](https://github.com/tekk/tekflash/commits/main)
+
 A safe, fast, cross-platform TUI for flashing, backing up, and restoring block devices —
 SD cards, USB sticks, and other removable media — on macOS, Linux, and Windows.
 
@@ -126,3 +137,7 @@ six targets: `x86_64`/`aarch64` musl Linux, `x86_64`/`aarch64` Apple Darwin,
 ## License
 
 GPL-2.0-only
+
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=tekk/tekflash&type=Date)](https://star-history.com/#tekk/tekflash&Date)
