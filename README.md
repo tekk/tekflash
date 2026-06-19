@@ -30,7 +30,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cargo install --git https://github.com/tekk/tekflash --bin tekflash --locked
 
 # Or pin to a released tag for a reproducible install
-cargo install --git https://github.com/tekk/tekflash --tag v0.0.2 --bin tekflash --locked
+cargo install --git https://github.com/tekk/tekflash --tag v0.0.3 --bin tekflash --locked
 
 # Verify
 tekflash --version
