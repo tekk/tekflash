@@ -27,14 +27,13 @@ pub fn overlay(f: &mut Frame, area: Rect, theme: &Theme) {
             Span::raw("      pick the highlighted device -> Flash / Backup / Archive"),
         ]),
         Line::from(vec![
-            Span::styled("Tab", theme.title()),
-            Span::raw(
-                "        toggle showing internal/system disks; with a detached backup, cycles",
-            ),
+            Span::styled("a", theme.title()),
+            Span::raw("          toggle showing internal / system disks"),
         ]),
-        Line::from(vec![Span::raw(
-            "            removable -> show-all -> resume backup",
-        )]),
+        Line::from(vec![
+            Span::styled("Tab", theme.title()),
+            Span::raw("        switch to a running session (resumes a detached backup)"),
+        ]),
         Line::from(vec![
             Span::styled("r", theme.title()),
             Span::raw("          refresh device list"),
@@ -42,10 +41,6 @@ pub fn overlay(f: &mut Frame, area: Rect, theme: &Theme) {
         Line::from(vec![
             Span::styled("F2", theme.title()),
             Span::raw("         open the file browser at the focused field"),
-        ]),
-        Line::from(vec![
-            Span::styled("b", theme.title()),
-            Span::raw("          resume a backup that you detached with Esc"),
         ]),
         Line::from(""),
         Line::from(Span::styled(" File browser ", theme.title())),
@@ -90,7 +85,7 @@ pub fn overlay(f: &mut Frame, area: Rect, theme: &Theme) {
         Line::from(Span::styled(" Safety ", theme.title())),
         Line::from(""),
         Line::from("Internal/system disks are hidden by default. Pass --show-all or press"),
-        Line::from("Tab to reveal them; they are highlighted in red and require explicit"),
+        Line::from("a to reveal them; they are highlighted in red and require explicit"),
         Line::from("confirmation before any write."),
         Line::from(""),
         Line::from("All destructive operations show a confirmation modal with the device"),

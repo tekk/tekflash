@@ -90,9 +90,9 @@ fn render_backup_banner(
         .unwrap_or_else(|| p.params.dest.display().to_string());
 
     let resume_cue = match &p.status {
-        BackupStatus::Running => "press b to resume",
-        BackupStatus::Finished { .. } => "press b to view summary",
-        BackupStatus::Failed { .. } => "press b for error details",
+        BackupStatus::Running => "press Tab to resume",
+        BackupStatus::Finished { .. } => "press Tab to view summary",
+        BackupStatus::Failed { .. } => "press Tab for error details",
     };
 
     let line = Line::from(vec![
@@ -179,27 +179,17 @@ fn render_footer(f: &mut Frame, area: Rect, state: &AppState) {
     let theme = &state.theme;
     let mut keys: Vec<(&str, &str)> = vec![("↑↓", "select"), ("↵", "pick action")];
     let has_detached = state.backup_progress.is_some() && state.backup_detached;
-    // Surface the resume shortcut as a first-class menu item whenever a backup is
-    // running (or finished) in the background.
+    keys.push(("a", "show-all"));
     if has_detached {
+        // Tab switches to / resumes the detached session. The label adapts so the user
+        // can tell from the footer whether the backup is still running or it finished.
         let label = match state.backup_progress.as_ref().map(|p| &p.status) {
             Some(BackupStatus::Finished { .. }) => "view backup summary",
             Some(BackupStatus::Failed { .. }) => "view backup error",
-            _ => "resume backup",
+            _ => "resume session",
         };
-        keys.push(("b", label));
+        keys.push(("Tab", label));
     }
-    // Tab cycles: removable -> show-all -> resume backup, when a backup is detached.
-    let tab_label = if has_detached {
-        if state.show_all {
-            "resume backup"
-        } else {
-            "show-all then resume"
-        }
-    } else {
-        "show-all"
-    };
-    keys.push(("Tab", tab_label));
     keys.push(("r", "refresh"));
     keys.push(("?", "help"));
     keys.push(("q", "quit"));
