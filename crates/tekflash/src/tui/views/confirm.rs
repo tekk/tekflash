@@ -65,7 +65,7 @@ impl Confirm {
 }
 
 pub fn render(f: &mut Frame, area: Rect, confirm: &Confirm, device: &BlockDevice, theme: &Theme) {
-    let popup = centered(area, 76, 16);
+    let popup = centered(area, 110, 20);
     f.render_widget(Clear, popup);
 
     let dangerous = matches!(confirm.action, Action::Flash) || device.is_system;

@@ -198,15 +198,18 @@ impl CodecPicker {
 }
 
 pub fn render(f: &mut Frame, area: Rect, picker: &CodecPicker, theme: &Theme) {
-    let popup = centered(area, 84, 22);
+    // Use almost the whole screen so the codec blurbs aren't truncated. The `centered`
+    // helper already clamps to (area − 4), so on an 80-wide terminal this gracefully
+    // shrinks; on a typical 120+ wide terminal it stretches to 140 with full blurbs.
+    let popup = centered(area, 140, 32);
     f.render_widget(Clear, popup);
 
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Min(8),
-            Constraint::Length(5),
+            Constraint::Min(10),
+            Constraint::Length(6),
             Constraint::Length(2),
         ])
         .split(popup);
@@ -229,30 +232,34 @@ pub fn render(f: &mut Frame, area: Rect, picker: &CodecPicker, theme: &Theme) {
     );
     f.render_widget(header, outer[0]);
 
-    // Codec list
+    // Codec list. Each item is two lines so the blurb has its own line and never
+    // collides with the bars on narrow terminals.
     let items: Vec<ListItem<'_>> = CODECS
         .iter()
         .enumerate()
         .map(|(i, c)| {
             let level = picker.levels[i];
             let level_str = if c.min_level == c.max_level {
-                "  - ".to_string()
+                " — ".to_string()
             } else {
                 format!("L{level:>2}")
             };
             let size_bar = bar(c.size_score, theme);
             let speed_bar = bar(c.speed_score, theme);
-            let line = Line::from(vec![
+            let top = Line::from(vec![
                 Span::styled(format!("  {:<11}", c.name), theme.body()),
-                Span::styled(format!("{level_str:>5}  "), theme.title()),
-                Span::raw("size "),
+                Span::styled(format!("{level_str:>4}  "), theme.title()),
+                Span::styled("size  ", theme.muted_s()),
                 size_bar,
-                Span::raw("  speed "),
-                speed_bar,
                 Span::raw("   "),
+                Span::styled("speed ", theme.muted_s()),
+                speed_bar,
+            ]);
+            let bottom = Line::from(vec![
+                Span::raw("           "), // indent under codec name
                 Span::styled(c.blurb, theme.muted_s()),
             ]);
-            ListItem::new(line)
+            ListItem::new(vec![top, bottom])
         })
         .collect();
     let list = List::new(items)
@@ -262,7 +269,10 @@ pub fn render(f: &mut Frame, area: Rect, picker: &CodecPicker, theme: &Theme) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(theme.muted_s())
-                .title(Line::from(Span::styled(" Codecs ", theme.title()))),
+                .title(Line::from(Span::styled(
+                    " Codecs   (bars: 10 cells, 0 = worst, 10 = best) ",
+                    theme.title(),
+                ))),
         );
     let mut s = ListState::default();
     s.select(Some(picker.cursor));

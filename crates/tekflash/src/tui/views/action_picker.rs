@@ -92,7 +92,7 @@ pub fn render(
     device: &BlockDevice,
     theme: &Theme,
 ) {
-    let popup = centered(area, 64, 13);
+    let popup = centered(area, 90, 14);
     f.render_widget(Clear, popup);
 
     let outer = Layout::default()
