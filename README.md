@@ -30,7 +30,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cargo install --git https://github.com/tekk/tekflash --bin tekflash --locked
 
 # Or pin to a released tag for a reproducible install
-cargo install --git https://github.com/tekk/tekflash --tag v0.0.3 --bin tekflash --locked
+cargo install --git https://github.com/tekk/tekflash --tag v0.0.4 --bin tekflash --locked
 
 # Verify
 tekflash --version
@@ -66,6 +66,41 @@ sudo tekflash archive /Volumes/MyDisk backup.tar.zst --encrypt password
 
 On Windows, run from an elevated PowerShell (or right-click -> Run as administrator)
 without `sudo`. Device paths look like `\\.\PhysicalDrive2` or just `E:`.
+
+## What's in the TUI
+
+- **Device picker** — every removable disk is listed with vendor, model, size, bus,
+  mountpoints. Internal / boot disks are hidden by default; press `a` to reveal them.
+- **Action picker** — Enter on a device opens Flash / Backup / Archive with one-line
+  trade-off explanations. Internal disks get a red header so destructive choices are
+  obvious.
+- **Codec picker** — zstd / lz4 / brotli / xz / gzip / bzip2 / none, each with a
+  one-line blurb, a level (per-codec range, codec remembers its choice), and rough
+  size / speed bars. Picked codec auto-appends the right extension (`.img.zst`,
+  `.tar.zst`, etc.) in the file browser.
+- **File browser** — type-ahead filter in Open mode, type-the-filename in Save mode
+  with the auto-extension shown in grey as you type. `..` row to walk up; `.` row
+  (Save mode) to commit in the current directory. Backspace pops typed characters
+  before walking up.
+- **Live progress view (Backup + Archive)** — runs in a background thread, doesn't
+  block the TUI:
+    - bytes read / total / percentage gauge
+    - rate (now) and rate (avg) in **`MB/s` and `GB/min`**
+    - elapsed + ETA in `HH:MM:SS`
+    - estimated output file size projected from the live compression ratio
+    - BLAKE3 digest when finished
+    - **defrag-style block map** — each cell ≈ `total / cells` bytes, shades full /
+      partial / empty as the source is read
+    - for archives, a `current` row shows the file being added to the tar
+- **Concurrent sessions** — start several backups / archives at once, **Tab** cycles
+  through them and back to the home view, mini progress bars sit at the bottom of
+  the home view showing each session's status / rate / destination. Sessions keep
+  running when you Esc out of their full view; the worker thread streams in the
+  background until completion.
+- **macOS niceties** — backups use `/dev/rdiskN` automatically for max throughput;
+  archive auto-mounts via `diskutil mountDisk` if the source volume isn't already
+  mounted; `.Spotlight-V100` / `.fseventsd` / `.Trashes` etc. are skipped so SIP
+  ACLs don't fail the archive.
 
 ## Building
 
