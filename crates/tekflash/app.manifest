@@ -3,7 +3,7 @@
   <assemblyIdentity
       type="win32"
       name="org.tekk.tekflash"
-      version="0.0.4.0"
+      version="0.0.5.0"
       processorArchitecture="*"/>
   <description>tekflash — TUI for flashing, backing up, and restoring block devices</description>
 

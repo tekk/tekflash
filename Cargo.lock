@@ -1582,7 +1582,7 @@ dependencies = [
 
 [[package]]
 name = "tekflash"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "clap",
  "clap_mangen",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "tekflash-core"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "argon2",
  "blake3",
