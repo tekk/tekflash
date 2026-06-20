@@ -121,7 +121,7 @@ fn do_backup(
     // Open the source through the per-OS fast path: F_NOCACHE + F_RDAHEAD on macOS
     // (combined with /dev/rdiskN that the caller already substituted in),
     // posix_fadvise(SEQUENTIAL|NOREUSE) on Linux, FILE_FLAG_SEQUENTIAL_SCAN on Windows.
-    let src = tekflash_core::device::open_fast_read(&params.source)
+    let mut src = tekflash_core::device::open_fast_read(&params.source)
         .map_err(|e| eyre!("open source {}: {}", params.source.display(), e))?;
     let dst = std::fs::File::create(&params.dest)
         .map_err(|e| eyre!("create dest {}: {}", params.dest.display(), e))?;
@@ -135,17 +135,37 @@ fn do_backup(
     // Larger buffer = fewer syscalls and lets the kernel stream bigger DMA windows.
     // 8 MiB amortizes per-syscall costs and is the sweet spot for USB 3.x / NVMe.
     const BUF_BYTES: usize = 8 * 1024 * 1024;
-    let mut src = std::io::BufReader::with_capacity(BUF_BYTES, src);
     let mut buf = vec![0u8; BUF_BYTES];
     let mut bytes_in: u64 = 0;
     let mut last_tick = Instant::now();
     let tick_interval = Duration::from_millis(150);
 
     loop {
-        let n = src.read(&mut buf).map_err(|e| eyre!("read: {}", e))?;
-        if n == 0 {
-            break;
-        }
+        // Cap each read to what's actually left on the device. Windows raw devices
+        // return ERROR_SECTOR_NOT_FOUND (os error 27) when the kernel tries to satisfy
+        // a read that would straddle the end of the addressable range — that's the
+        // failure mode users hit at 99%+. Sizing the read this way avoids it entirely.
+        let to_read = match params.total_bytes {
+            Some(t) if bytes_in >= t => break,
+            Some(t) => ((t - bytes_in) as usize).min(buf.len()),
+            None => buf.len(),
+        };
+        let n = match src.read(&mut buf[..to_read]) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if is_end_of_device_error(&e, bytes_in, params.total_bytes, BUF_BYTES) => {
+                // Tail-of-device read returned a sector-not-found-style error. We've
+                // already captured every byte the device acknowledges; treat as EOF.
+                tracing::warn!(
+                    error = %e,
+                    bytes_in,
+                    total = ?params.total_bytes,
+                    "tolerating end-of-device error and finishing the backup cleanly"
+                );
+                break;
+            }
+            Err(e) => return Err(eyre!("read at offset {bytes_in}: {e}")),
+        };
         hasher.update(&buf[..n]);
         writer
             .write_all(&buf[..n])
@@ -164,6 +184,41 @@ fn do_backup(
     // Drop the encoder to flush trailers (zstd auto_finish, lz4 finish_on_drop, etc.).
     drop(writer);
     Ok((bytes_in, hasher.finalize_hex()))
+}
+
+/// Decide whether an I/O error during a block-device read should be treated as a
+/// clean EOF. Windows raw devices return `ERROR_SECTOR_NOT_FOUND` (os error 27),
+/// `ERROR_HANDLE_EOF` (38), or sometimes `ERROR_CRC` (23) when the read straddles or
+/// goes past the addressable end of the device — these are not real read failures, the
+/// OS is just telling us "no more sectors here". Linux can surface `UnexpectedEof` at
+/// the tail; macOS returns short reads instead. We only tolerate these when bytes_in is
+/// within one buffer's worth of the device's reported total (or total is unknown), so a
+/// genuine mid-device bad-block error still propagates.
+fn is_end_of_device_error(
+    e: &std::io::Error,
+    bytes_in: u64,
+    total_bytes: Option<u64>,
+    slack: usize,
+) -> bool {
+    let near_end = match total_bytes {
+        Some(t) => bytes_in + slack as u64 >= t,
+        None => true,
+    };
+    if !near_end {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        if let Some(code) = e.raw_os_error() {
+            // 27 = ERROR_SECTOR_NOT_FOUND, 38 = ERROR_HANDLE_EOF, 23 = ERROR_CRC,
+            // 87 = ERROR_INVALID_PARAMETER (kernel rejects an over-the-end request).
+            if matches!(code, 23 | 27 | 38 | 87) {
+                return true;
+            }
+        }
+    }
+    let _ = e;
+    matches!(e.kind(), std::io::ErrorKind::UnexpectedEof)
 }
 
 /// Walk a directory tree, tar-stream its contents through the chosen codec, and emit
@@ -788,6 +843,30 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_file(dst);
+    }
+
+    #[test]
+    fn is_end_of_device_error_only_tolerates_errors_near_the_end() {
+        use std::io::{Error, ErrorKind};
+        let buf = 8 * 1024 * 1024usize;
+        let total = Some(1_000_000_000u64);
+
+        // UnexpectedEof at the tail -> tolerate.
+        let eof = Error::new(ErrorKind::UnexpectedEof, "tail");
+        assert!(is_end_of_device_error(
+            &eof,
+            total.unwrap() - 100,
+            total,
+            buf
+        ));
+        // UnexpectedEof mid-device -> propagate.
+        assert!(!is_end_of_device_error(&eof, 1000, total, buf));
+        // Unknown total -> tolerate (we don't know where the end is).
+        let unrelated = Error::new(ErrorKind::Other, "generic");
+        let _ = unrelated;
+        // Genuine mid-device read errors should still propagate even with no total.
+        let perm = Error::new(ErrorKind::PermissionDenied, "denied");
+        assert!(!is_end_of_device_error(&perm, 1000, total, buf));
     }
 
     #[test]
