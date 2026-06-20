@@ -19,7 +19,7 @@ pub fn overlay(f: &mut Frame, area: Rect, theme: &Theme) {
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled("↑↓ / j k", theme.title()),
+            Span::styled("Up/Dn / j k", theme.title()),
             Span::raw("   move selection in tables"),
         ]),
         Line::from(vec![

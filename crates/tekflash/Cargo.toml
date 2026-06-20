@@ -42,3 +42,6 @@ hostname = { workspace = true }
 [build-dependencies]
 clap = { version = "4.5", features = ["derive"] }
 clap_mangen = "0.2"
+
+[target.'cfg(windows)'.build-dependencies]
+embed-manifest = "1.4"

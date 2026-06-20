@@ -158,7 +158,7 @@ pub fn render(
 
     let footer = crate::tui::widgets::footer_keys(
         theme,
-        &[("↑↓", "choose"), ("↵", "next"), ("Esc", "cancel")],
+        &[("Up/Dn", "choose"), ("Enter", "next"), ("Esc", "cancel")],
     );
     f.render_widget(ratatui::widgets::Paragraph::new(footer), outer[3]);
 }

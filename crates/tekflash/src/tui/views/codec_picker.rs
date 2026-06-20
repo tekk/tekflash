@@ -336,10 +336,10 @@ pub fn render(f: &mut Frame, area: Rect, picker: &CodecPicker, theme: &Theme) {
     let footer = crate::tui::widgets::footer_keys(
         theme,
         &[
-            ("↑↓", "choose codec"),
-            ("←-> or -/+", "adjust level"),
+            ("Up/Dn", "choose codec"),
+            ("Left/Right or -/+", "adjust level"),
             ("0/9", "min/max"),
-            ("↵", "next"),
+            ("Enter", "next"),
             ("Esc", "cancel"),
         ],
     );

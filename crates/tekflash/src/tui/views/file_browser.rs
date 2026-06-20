@@ -660,9 +660,9 @@ fn render_save_input(f: &mut Frame, area: Rect, browser: &FileBrowser, theme: &T
 
 fn render_footer(f: &mut Frame, area: Rect, browser: &FileBrowser, theme: &Theme) {
     let mut keys: Vec<(&str, &str)> = vec![
-        ("↑↓", "move"),
-        ("↵", "activate"),
-        ("←/Backspace", "up"),
+        ("Up/Dn", "move"),
+        ("Enter", "activate"),
+        ("Left/Backspace", "up"),
         ("Tab", "all-files"),
         ("Ctrl-H", "hidden"),
         ("Esc", "back"),

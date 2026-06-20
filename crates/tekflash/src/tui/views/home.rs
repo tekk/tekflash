@@ -211,7 +211,7 @@ fn session_line<'a>(idx: usize, s: &'a BackupProgress, inner_w: usize, theme: &T
 
 fn render_footer(f: &mut Frame, area: Rect, state: &AppState) {
     let theme = &state.theme;
-    let mut keys: Vec<(&str, &str)> = vec![("↑↓", "select"), ("↵", "pick action")];
+    let mut keys: Vec<(&str, &str)> = vec![("Up/Dn", "select"), ("Enter", "pick action")];
     keys.push(("a", "show-all"));
     if !state.sessions.is_empty() {
         let running = state.sessions.iter().filter(|s| s.is_running()).count();

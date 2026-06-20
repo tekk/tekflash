@@ -203,7 +203,7 @@ pub fn render(f: &mut Frame, area: Rect, confirm: &Confirm, device: &BlockDevice
             .borders(Borders::ALL)
             .border_style(theme.muted_s())
             .title(Line::from(Span::styled(
-                " ←/-> choose · ↵ activate · Esc cancel ",
+                " Left/Right choose | Enter activate | Esc cancel ",
                 theme.muted_s(),
             ))),
     );
