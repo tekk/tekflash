@@ -20,21 +20,28 @@ SD cards, USB sticks, and other removable media. Works on macOS, Linux, and Wind
 
 ## Install
 
-### Via cargo (from source)
+### Via cargo (from crates.io)
 
 ```sh
 # Prereq: a recent stable Rust toolchain (rustc 1.82+). If you don't have one:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Install the latest tekflash from main into ~/.cargo/bin/tekflash
-cargo install --git https://github.com/tekk/tekflash --bin tekflash --locked
-
-# Or pin to a released tag for a reproducible install
-cargo install --git https://github.com/tekk/tekflash --tag v0.0.6 --bin tekflash --locked
+# Latest published version
+cargo install tekflash --locked
 
 # Verify
 tekflash --version
 sudo tekflash --check        # macOS / Linux: confirms elevated capability
+```
+
+### Via cargo (from git)
+
+```sh
+# Install the latest tekflash from main into ~/.cargo/bin/tekflash
+cargo install --git https://github.com/tekk/tekflash --bin tekflash --locked
+
+# Or pin to a released tag for a reproducible install
+cargo install --git https://github.com/tekk/tekflash --tag v0.0.7 --bin tekflash --locked
 ```
 
 `--locked` uses the committed `Cargo.lock` so transitive dependency versions match

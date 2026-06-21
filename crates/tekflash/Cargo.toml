@@ -14,7 +14,9 @@ name = "tekflash"
 path = "src/main.rs"
 
 [dependencies]
-tekflash-core = { path = "../tekflash-core" }
+# `version` is required by crates.io; `path` is kept so workspace builds still resolve
+# the in-repo source.
+tekflash-core = { path = "../tekflash-core", version = "0.0.7" }
 
 tokio = { workspace = true }
 futures = { workspace = true }
