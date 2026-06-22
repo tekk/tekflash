@@ -6,7 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Core library for tekflash: device enumeration, streaming I/O pipeline, compression, encryption, archive"
+description = "Internal implementation detail of the `tekflash` binary. Not a public API — do not depend on this crate directly; its surface may break in any patch release."
+keywords = ["internal", "tekflash"]
+categories = ["development-tools"]
 
 [dependencies]
 tokio = { workspace = true }

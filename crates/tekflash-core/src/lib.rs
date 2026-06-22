@@ -1,7 +1,25 @@
-//! tekflash-core: device enumeration, streaming I/O pipeline, compression, encryption, archive.
+//! # tekflash-core — **internal implementation detail of [`tekflash`]**
 //!
-//! No UI here. The binary crate (`tekflash`) drives this library from either the TUI or
-//! the headless CLI entry points.
+//! This crate is the engine behind the [`tekflash`](https://crates.io/crates/tekflash)
+//! TUI: device enumeration, the streaming I/O pipeline, compression, encryption, and
+//! archive support. It contains no UI; the binary crate `tekflash` drives this library
+//! from either the TUI or the headless CLI entry points.
+//!
+//! ## Stability — there is none
+//!
+//! `tekflash-core` is published only because [Cargo requires it](https://doc.rust-lang.org/cargo/reference/registries.html)
+//! in order to publish the `tekflash` binary that depends on it. **Treat every item
+//! here as private.** The API may break in any patch release; renames, signature
+//! changes, and item removals will not be accompanied by a major version bump.
+//!
+//! If you want to *use* tekflash, install the binary:
+//!
+//! ```sh
+//! cargo install tekflash --locked
+//! ```
+//!
+//! If you want to embed similar functionality in your own project, fork the relevant
+//! module — depending on `tekflash-core` directly will break you.
 
 pub mod archive;
 pub mod device;
