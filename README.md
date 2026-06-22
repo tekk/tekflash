@@ -1,9 +1,12 @@
 # TEKFLASH
 
+[![Crates.io](https://img.shields.io/crates/v/tekflash?logo=rust&label=crates.io)](https://crates.io/crates/tekflash)
+[![Crates.io downloads](https://img.shields.io/crates/d/tekflash?logo=rust&label=crates.io%20downloads)](https://crates.io/crates/tekflash)
+[![docs.rs](https://img.shields.io/docsrs/tekflash-core?logo=rust&label=docs.rs)](https://docs.rs/tekflash-core)
 [![CI](https://img.shields.io/github/actions/workflow/status/tekk/tekflash/ci.yml?branch=main&label=ci&logo=github)](https://github.com/tekk/tekflash/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/actions/workflow/status/tekk/tekflash/release.yml?label=release&logo=github)](https://github.com/tekk/tekflash/actions/workflows/release.yml)
 [![Latest release](https://img.shields.io/github/v/release/tekk/tekflash?logo=github&sort=semver)](https://github.com/tekk/tekflash/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/tekk/tekflash/total?logo=github)](https://github.com/tekk/tekflash/releases)
+[![GitHub downloads](https://img.shields.io/github/downloads/tekk/tekflash/total?logo=github&label=GitHub%20downloads)](https://github.com/tekk/tekflash/releases)
 [![License](https://img.shields.io/github/license/tekk/tekflash)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.82%2B-orange?logo=rust)](https://www.rust-lang.org)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-blue)](https://github.com/tekk/tekflash/releases/latest)
