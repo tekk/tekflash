@@ -35,6 +35,7 @@ impl Action {
         }
     }
 
+    #[allow(dead_code)] // kept for future Confirm-result messages
     pub fn short_label(self) -> &'static str {
         match self {
             Action::Flash => "Flash",

@@ -518,16 +518,42 @@ fn handle_confirm_key(state: &mut AppState, code: KeyCode) -> bool {
                 state.confirm = None;
             }
             ConfirmFocus::Confirm => {
-                confirm.result_message = Some(format!(
-                        "Queued: {} on {} (today: run `sudo tekflash {} ...` in your shell to execute).",
-                        confirm.action.short_label(),
-                        state
-                            .devices
-                            .get(confirm.device_idx)
-                            .map(|d| d.path.display().to_string())
-                            .unwrap_or_default(),
-                        confirm.action.short_label().to_lowercase(),
-                    ));
+                // Snapshot the modal's data before we drop it from state.
+                let action = confirm.action;
+                let device_idx = confirm.device_idx;
+                let file = confirm.file.clone();
+                let codec = confirm.codec.unwrap_or(Codec::None);
+                let level = confirm.level.unwrap_or(CompressionLevel(3));
+                state.confirm = None;
+
+                // Flash is the only action that reaches the Confirm step today; the
+                // others (Backup, Archive) start straight from the file browser. If
+                // Backup / Archive ever get routed through Confirm, extend this match.
+                if !matches!(action, Action::Flash) {
+                    return false;
+                }
+
+                // Resolve the device to the per-OS fast path (/dev/rdiskN on macOS) so
+                // the write goes through the unbuffered character device.
+                let device_path = state
+                    .devices
+                    .get(device_idx)
+                    .map(|d| d.path.clone())
+                    .unwrap_or_default();
+                let fast_dest = tekflash_core::device::resolve_fast_path(&device_path);
+                // total_bytes tracks *compressed* bytes consumed from the source —
+                // that's what drives the gauge.
+                let total_bytes = std::fs::metadata(&file).ok().map(|m| m.len());
+                let params = BackupParams {
+                    kind: progress_runner::OperationKind::Flash,
+                    source: file,
+                    dest: fast_dest,
+                    codec,
+                    level,
+                    total_bytes,
+                };
+                state.sessions.push(BackupProgress::new(device_idx, params));
+                state.viewing_session = Some(state.sessions.len() - 1);
             }
         },
         _ => {}

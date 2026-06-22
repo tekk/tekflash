@@ -26,6 +26,8 @@ pub enum OperationKind {
     Backup,
     /// File-level tar archive of a mounted directory.
     Archive,
+    /// Write a (possibly compressed) image file to a block device.
+    Flash,
 }
 
 impl OperationKind {
@@ -33,6 +35,7 @@ impl OperationKind {
         match self {
             OperationKind::Backup => "Backup",
             OperationKind::Archive => "Archive",
+            OperationKind::Flash => "Flash",
         }
     }
 }
@@ -91,6 +94,7 @@ pub fn spawn_backup(
             let result = match params.kind {
                 OperationKind::Backup => do_backup(&params, bytes_out_worker.clone(), &tx),
                 OperationKind::Archive => do_archive(&params, bytes_out_worker.clone(), &tx),
+                OperationKind::Flash => do_flash(&params, bytes_out_worker.clone(), &tx),
             };
             match result {
                 Ok((bytes_in, hash)) => {
@@ -184,6 +188,112 @@ fn do_backup(
     // Drop the encoder to flush trailers (zstd auto_finish, lz4 finish_on_drop, etc.).
     drop(writer);
     Ok((bytes_in, hasher.finalize_hex()))
+}
+
+/// Write a (possibly compressed) image file to a block device, hashing the decoded
+/// stream and emitting progress events. Compression is auto-detected from the source's
+/// magic bytes; raw images, zstd, xz, gzip, bzip2, lz4, and brotli all flow through the
+/// same path because the codec layer is a no-op for `Codec::None`.
+fn do_flash(
+    params: &BackupParams,
+    bytes_out: Arc<AtomicU64>,
+    tx: &Sender<BackupEvent>,
+) -> Result<(u64, String)> {
+    // Peek at the first 16 bytes to pick a decoder. We keep the bytes we read here in a
+    // `Cursor` chained ahead of the rest of the file so nothing is lost — `File` is not
+    // re-seekable on every backend (devices in particular).
+    let mut src_file = std::fs::File::open(&params.source)
+        .map_err(|e| eyre!("open source {}: {}", params.source.display(), e))?;
+    let mut head_buf = [0u8; 16];
+    let head_n = src_file
+        .read(&mut head_buf)
+        .map_err(|e| eyre!("peek source: {e}"))?;
+    let fmt = tekflash_core::pipeline::format::detect(&head_buf[..head_n]);
+    let codec_in = tekflash_core::pipeline::compress::Codec::from(fmt);
+    let _ = tx.send(BackupEvent::Tick {
+        bytes_in: 0,
+        bytes_out: 0,
+        current_file: Some(format!(
+            "source: {} ({})",
+            params.source.display(),
+            fmt.human()
+        )),
+    });
+
+    // Reconstitute the stream: head + rest of file, with a counter so we can report
+    // compressed bytes consumed as `bytes_in` against the source file size.
+    let head_cursor = std::io::Cursor::new(head_buf[..head_n].to_vec());
+    let combined = head_cursor.chain(src_file);
+    let bytes_in_atom = Arc::new(AtomicU64::new(0));
+    let counting_src = CountingReader {
+        inner: combined,
+        bytes: bytes_in_atom.clone(),
+    };
+    let mut decoded = tekflash_core::pipeline::compress::decoder(codec_in, counting_src)
+        .map_err(|e| eyre!("init decoder for {}: {e}", fmt.human()))?;
+
+    // Open the dest device for write. We deliberately don't truncate or create — the
+    // device node already exists, and writing zero-extension past the end isn't what we
+    // want either.
+    let dst = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&params.dest)
+        .map_err(|e| eyre!("open dest {}: {e}", params.dest.display()))?;
+    let mut writer = ByteCounter {
+        inner: dst,
+        bytes: bytes_out.clone(),
+    };
+
+    let mut hasher = Hasher::new(HashKind::Blake3);
+    const BUF_BYTES: usize = 8 * 1024 * 1024;
+    let mut buf = vec![0u8; BUF_BYTES];
+    let mut last_tick = Instant::now();
+    let tick_interval = Duration::from_millis(150);
+
+    loop {
+        let n = match decoded.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                return Err(eyre!(
+                    "decode at compressed offset {}: {e}",
+                    bytes_in_atom.load(Ordering::Relaxed)
+                ));
+            }
+        };
+        hasher.update(&buf[..n]);
+        writer
+            .write_all(&buf[..n])
+            .map_err(|e| eyre!("write to device: {e}"))?;
+        if last_tick.elapsed() >= tick_interval {
+            let _ = tx.send(BackupEvent::Tick {
+                bytes_in: bytes_in_atom.load(Ordering::Relaxed),
+                bytes_out: bytes_out.load(Ordering::Relaxed),
+                current_file: None,
+            });
+            last_tick = Instant::now();
+        }
+    }
+    // Flush so we don't report success while data is still buffered in the kernel.
+    writer.flush().map_err(|e| eyre!("flush device: {e}"))?;
+    let bytes_in_final = bytes_in_atom.load(Ordering::Relaxed);
+    Ok((bytes_in_final, hasher.finalize_hex()))
+}
+
+/// Generic byte-counting wrapper around any reader. Used by `do_flash` to track
+/// compressed bytes consumed from the source file (the inner stream is wrapped before
+/// the decoder, so the counter sees the *compressed* byte stream).
+struct CountingReader<R: Read> {
+    inner: R,
+    bytes: Arc<AtomicU64>,
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.bytes.fetch_add(n as u64, Ordering::Relaxed);
+        Ok(n)
+    }
 }
 
 /// Decide whether an I/O error during a block-device read should be treated as a
@@ -849,22 +959,15 @@ mod tests {
     fn is_end_of_device_error_only_tolerates_errors_near_the_end() {
         use std::io::{Error, ErrorKind};
         let buf = 8 * 1024 * 1024usize;
-        let total = Some(1_000_000_000u64);
+        let total_val = 1_000_000_000u64;
+        let total = Some(total_val);
 
         // UnexpectedEof at the tail -> tolerate.
         let eof = Error::new(ErrorKind::UnexpectedEof, "tail");
-        assert!(is_end_of_device_error(
-            &eof,
-            total.unwrap() - 100,
-            total,
-            buf
-        ));
+        assert!(is_end_of_device_error(&eof, total_val - 100, total, buf));
         // UnexpectedEof mid-device -> propagate.
         assert!(!is_end_of_device_error(&eof, 1000, total, buf));
-        // Unknown total -> tolerate (we don't know where the end is).
-        let unrelated = Error::new(ErrorKind::Other, "generic");
-        let _ = unrelated;
-        // Genuine mid-device read errors should still propagate even with no total.
+        // Genuine mid-device read errors should still propagate.
         let perm = Error::new(ErrorKind::PermissionDenied, "denied");
         assert!(!is_end_of_device_error(&perm, 1000, total, buf));
     }

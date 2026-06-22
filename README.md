@@ -44,7 +44,7 @@ sudo tekflash --check        # macOS / Linux: confirms elevated capability
 cargo install --git https://github.com/tekk/tekflash --bin tekflash --locked
 
 # Or pin to a released tag for a reproducible install
-cargo install --git https://github.com/tekk/tekflash --tag v0.0.7 --bin tekflash --locked
+cargo install --git https://github.com/tekk/tekflash --tag v0.0.8 --bin tekflash --locked
 ```
 
 `--locked` uses the committed `Cargo.lock` so transitive dependency versions match
