@@ -131,6 +131,26 @@ pub fn detect_by_extension(path: &std::path::Path) -> Option<InputFormat> {
     }
 }
 
+/// Resolve the [`Codec`](super::compress::Codec) needed to decode `path` for flashing.
+/// Magic-byte detection is authoritative; the extension is a fallback only when the file
+/// is shorter than a magic (or its leading bytes look like raw data). This is the single
+/// source of truth used by both the CLI flash path and the TUI flash worker.
+pub fn detect_codec(path: &std::path::Path) -> std::io::Result<super::compress::Codec> {
+    use super::compress::Codec;
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    let mut f = std::fs::File::open(path)?;
+    let n = f.read(&mut head)?;
+    let fmt = detect(&head[..n]);
+    Ok(if matches!(fmt, InputFormat::Raw) {
+        detect_by_extension(path)
+            .map(Codec::from)
+            .unwrap_or(Codec::None)
+    } else {
+        Codec::from(fmt)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
