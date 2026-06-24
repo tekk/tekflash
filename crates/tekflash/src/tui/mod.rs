@@ -405,6 +405,8 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
                                 codec: p.codec,
                                 level: p.level,
                                 total_bytes,
+                                archive_format: tekflash_core::archive::ArchiveFormat::Tar,
+                                archive_selection: None,
                             };
                             state
                                 .sessions
@@ -434,6 +436,8 @@ fn handle_browser_key(state: &mut AppState, code: KeyCode, mods: KeyModifiers) {
                                 codec: p.codec,
                                 level: p.level,
                                 total_bytes: None, // worker walks the tree and reports it
+                                archive_format: tekflash_core::archive::ArchiveFormat::Tar,
+                                archive_selection: None,
                             };
                             state
                                 .sessions
@@ -551,6 +555,8 @@ fn handle_confirm_key(state: &mut AppState, code: KeyCode) -> bool {
                     codec,
                     level,
                     total_bytes,
+                    archive_format: tekflash_core::archive::ArchiveFormat::Tar,
+                    archive_selection: None,
                 };
                 state.sessions.push(BackupProgress::new(device_idx, params));
                 state.viewing_session = Some(state.sessions.len() - 1);

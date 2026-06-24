@@ -50,6 +50,14 @@ pub struct BackupParams {
     /// Total bytes of the source if known (block device size, file length, or, for
     /// archives, the sum of all file sizes after the worker walks the tree).
     pub total_bytes: Option<u64>,
+    /// Container format for archive operations. Defaults to `Tar` to keep legacy
+    /// callers byte-identical with the historical behaviour. The dispatch on
+    /// this field (Zip / 7z) lands in P4; for now only `Tar` is honoured.
+    #[allow(dead_code)] // wired in BackupParams now, used by do_archive dispatch in P4
+    pub archive_format: tekflash_core::archive::ArchiveFormat,
+    /// Optional include/exclude selection. `None` means "archive everything",
+    /// preserving the historical CLI behaviour.
+    pub archive_selection: Option<tekflash_core::archive::selection::ArchiveSelection>,
 }
 
 #[derive(Debug)]
@@ -65,6 +73,10 @@ pub enum BackupEvent {
         /// Currently-being-processed file, relative to the source root. Set by the
         /// archive worker; `None` for backups.
         current_file: Option<String>,
+        /// Parent directory of the current file, relative to the source root.
+        /// Set by the archive worker when it enters a new directory; `None`
+        /// otherwise (backups, flash, file-level ticks).
+        current_dir: Option<String>,
     },
     Finished {
         bytes_in: u64,
@@ -181,6 +193,7 @@ fn do_backup(
                 bytes_in,
                 bytes_out: bytes_out.load(Ordering::Relaxed),
                 current_file: None,
+                current_dir: None,
             });
             last_tick = Instant::now();
         }
@@ -218,6 +231,7 @@ fn do_flash(
             params.source.display(),
             fmt.human()
         )),
+        current_dir: None,
     });
 
     // Reconstitute the stream: head + rest of file, with a counter so we can report
@@ -270,6 +284,7 @@ fn do_flash(
                 bytes_in: bytes_in_atom.load(Ordering::Relaxed),
                 bytes_out: bytes_out.load(Ordering::Relaxed),
                 current_file: None,
+                current_dir: None,
             });
             last_tick = Instant::now();
         }
@@ -351,6 +366,7 @@ fn do_archive(
             bytes_in: 0,
             bytes_out: 0,
             current_file: Some(format!("mounting {}…", params.source.display())),
+            current_dir: None,
         });
         tekflash_core::device::try_mount(&params.source).map_err(|e| {
             eyre!(
@@ -368,7 +384,8 @@ fn do_archive(
     // Phase 1: walk the tree once to learn the total source size. This unlocks a
     // meaningful percentage and ETA in the UI; it usually finishes in a second or two
     // even for trees with tens of thousands of files.
-    let total = precompute_total_bytes(&source);
+    let selection = params.archive_selection.as_ref();
+    let total = precompute_total_bytes(&source, selection);
     let _ = tx.send(BackupEvent::Started { total_bytes: total });
     // Initial Tick so the UI shows the source and "starting…" right away even when
     // the archive completes in a few milliseconds (e.g. a tiny tree).
@@ -376,6 +393,7 @@ fn do_archive(
         bytes_in: 0,
         bytes_out: 0,
         current_file: Some(format!("opening {}", source.display())),
+        current_dir: None,
     });
 
     let dst = std::fs::File::create(&params.dest)
@@ -404,13 +422,17 @@ fn do_archive(
         tx,
         &mut last_tick,
         tick_interval,
+        selection,
     )?;
 
     builder.finish().map_err(|e| eyre!("finalize tar: {}", e))?;
     Ok((bytes_in, hasher.finalize_hex()))
 }
 
-fn precompute_total_bytes(root: &Path) -> u64 {
+fn precompute_total_bytes(
+    root: &Path,
+    selection: Option<&tekflash_core::archive::selection::ArchiveSelection>,
+) -> u64 {
     let mut total = 0u64;
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
     while let Some(p) = stack.pop() {
@@ -423,6 +445,18 @@ fn precompute_total_bytes(root: &Path) -> u64 {
         let Ok(meta) = std::fs::symlink_metadata(&p) else {
             continue;
         };
+        // Honour the selection (when provided) so the precomputed total matches
+        // what walk_and_archive will actually write. Directories that are
+        // ancestors of an included path must still be descended into even if the
+        // directory itself isn't in the included set.
+        if let Some(sel) = selection {
+            let is_dir = meta.file_type().is_dir();
+            let keep = sel.is_included(&p, root)
+                || (is_dir && sel.included.iter().any(|inc| inc.starts_with(&p)));
+            if !keep {
+                continue;
+            }
+        }
         if meta.file_type().is_dir() {
             if let Ok(rd) = std::fs::read_dir(&p) {
                 for e in rd.flatten() {
@@ -486,6 +520,7 @@ fn send_skip_tick(
         bytes_in,
         bytes_out: bytes_out_atom.load(Ordering::Relaxed),
         current_file: Some(format!("skipped ({reason}): {}", rel.display())),
+        current_dir: None,
     });
 }
 
@@ -500,6 +535,7 @@ fn walk_and_archive<W: Write>(
     tx: &Sender<BackupEvent>,
     last_tick: &mut Instant,
     tick_interval: Duration,
+    selection: Option<&tekflash_core::archive::selection::ArchiveSelection>,
 ) -> Result<()> {
     let rel = path.strip_prefix(base).unwrap_or(path).to_path_buf();
 
@@ -525,13 +561,36 @@ fn walk_and_archive<W: Write>(
         Err(e) => return Err(eyre!("stat {}: {}", path.display(), e)),
     };
 
+    // Honour the user's include/exclude selection. We silently skip non-included
+    // entries (no tick) to avoid flooding the channel on large excluded subtrees.
+    // Directories that are ancestors of included paths must still be descended
+    // into even if the directory itself isn't explicitly in the selection — that's
+    // how recursive include with mid-tree picks (e.g. only `root/sub/keep.txt`)
+    // works without forcing the user to also check every ancestor.
+    if let Some(sel) = selection {
+        let is_dir = meta.file_type().is_dir();
+        let keep = sel.is_included(path, base)
+            || (is_dir && sel.included.iter().any(|inc| inc.starts_with(path)));
+        if !keep {
+            return Ok(());
+        }
+    }
+
     // Tick on file boundaries (but at most every tick_interval so we don't flood the
-    // channel on trees with millions of tiny files).
+    // channel on trees with millions of tiny files). When the entry is a directory
+    // we also include `current_dir` so the UI can show "currently in <dir>".
     if last_tick.elapsed() >= tick_interval {
+        let is_dir = meta.file_type().is_dir();
+        let parent_rel = if is_dir {
+            Some(rel.display().to_string())
+        } else {
+            None
+        };
         let _ = tx.send(BackupEvent::Tick {
             bytes_in: *bytes_in,
             bytes_out: bytes_out_atom.load(Ordering::Relaxed),
             current_file: Some(rel.display().to_string()),
+            current_dir: parent_rel,
         });
         *last_tick = Instant::now();
     }
@@ -579,6 +638,7 @@ fn walk_and_archive<W: Write>(
                 tx,
                 last_tick,
                 tick_interval,
+                selection,
             )?;
         }
     } else if meta.file_type().is_symlink() {
@@ -678,6 +738,10 @@ pub struct BackupProgress {
     /// Set by the archive worker; the home view shows this in the mini bar and the
     /// progress view shows it as its own row in the stats panel.
     pub current_file: Option<String>,
+    /// Parent directory of the currently-archived file. Updated by the archive
+    /// walker on directory boundaries; sticky between ticks (we keep the last
+    /// known directory when a file-level tick arrives with `None`).
+    pub current_dir: Option<String>,
 
     /// Live counter that the worker writes through `ByteCounter` — the UI can poll this
     /// between Tick events to refresh the compressed-size column at 60 Hz.
@@ -709,6 +773,7 @@ impl BackupProgress {
             instant_rate: 0.0,
             status: BackupStatus::Running,
             current_file: None,
+            current_dir: None,
             bytes_out_live: bytes_out,
             rx,
             join_handle: Some(handle),
@@ -734,6 +799,7 @@ impl BackupProgress {
                     bytes_in,
                     bytes_out,
                     current_file,
+                    current_dir,
                 }) => {
                     let dt = self.last_tick_at.elapsed().as_secs_f64().max(1e-3);
                     self.instant_rate = (bytes_in - self.last_bytes_in_at_tick) as f64 / dt;
@@ -744,6 +810,8 @@ impl BackupProgress {
                     if current_file.is_some() {
                         self.current_file = current_file;
                     }
+                    // Keep the last known directory when the new tick has None.
+                    self.current_dir = current_dir.or(self.current_dir.take());
                     changed = true;
                 }
                 Ok(BackupEvent::Finished {
@@ -863,6 +931,8 @@ mod tests {
             codec: Codec::Zstd,
             level: CompressionLevel(3),
             total_bytes: Some(payload.len() as u64),
+            archive_format: tekflash_core::archive::ArchiveFormat::Tar,
+            archive_selection: None,
         };
         let mut prog = BackupProgress::new(0, params);
 
@@ -917,6 +987,8 @@ mod tests {
             codec: Codec::Zstd,
             level: CompressionLevel(3),
             total_bytes: None,
+            archive_format: tekflash_core::archive::ArchiveFormat::Tar,
+            archive_selection: None,
         };
         let mut prog = BackupProgress::new(0, params);
         let mut saw_current_file = false;
@@ -956,6 +1028,98 @@ mod tests {
     }
 
     #[test]
+    fn archive_runner_honors_explicit_selection_includes_and_excludes() {
+        use std::collections::HashSet;
+        use tekflash_core::archive::selection::ArchiveSelection;
+
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("tekflash-arch-sel-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(root.join("sub").join("excl")).unwrap();
+        std::fs::write(root.join("keep.txt"), b"keep me").unwrap();
+        std::fs::write(root.join("skip.txt"), b"skip me").unwrap();
+        std::fs::write(root.join("sub").join("keep2.txt"), b"also keep").unwrap();
+        std::fs::write(
+            root.join("sub").join("excl").join("x.txt"),
+            b"should NOT appear",
+        )
+        .unwrap();
+        let dst = root.with_extension("tar.zst");
+
+        let mut included = HashSet::new();
+        included.insert(root.join("keep.txt"));
+        included.insert(root.join("sub"));
+        let mut excluded = HashSet::new();
+        excluded.insert(root.join("sub").join("excl"));
+        let selection = ArchiveSelection {
+            included,
+            excluded,
+            excludes_glob: None,
+        };
+
+        let params = BackupParams {
+            kind: OperationKind::Archive,
+            source: root.clone(),
+            dest: dst.clone(),
+            codec: Codec::Zstd,
+            level: CompressionLevel(3),
+            total_bytes: None,
+            archive_format: tekflash_core::archive::ArchiveFormat::Tar,
+            archive_selection: Some(selection),
+        };
+        let mut prog = BackupProgress::new(0, params);
+
+        let started = Instant::now();
+        loop {
+            prog.poll();
+            if !prog.is_running() {
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                panic!("archive never finished");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        match &prog.status {
+            BackupStatus::Finished { .. } => {}
+            other => panic!("expected Finished, got {other:?}"),
+        }
+
+        // Decode the produced `.tar.zst` and collect entry paths.
+        let raw = std::fs::File::open(&dst).expect("open archive");
+        let decoder = zstd::stream::Decoder::new(raw).expect("zstd decoder");
+        let mut archive = ::tar::Archive::new(decoder);
+        let mut entries: Vec<String> = archive
+            .entries()
+            .expect("entries")
+            .filter_map(|e| e.ok())
+            .map(|e| {
+                let p = e.path().expect("entry path").into_owned();
+                // Strip trailing slash that tar adds for directory entries so
+                // the comparison is stable.
+                let s = p.display().to_string();
+                s.trim_end_matches('/').to_string()
+            })
+            .collect();
+        entries.sort();
+
+        let mut expected: Vec<String> = vec![
+            "keep.txt".to_string(),
+            "sub".to_string(),
+            "sub/keep2.txt".to_string(),
+        ];
+        expected.sort();
+
+        assert_eq!(entries, expected, "unexpected entry set in archive");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(dst);
+    }
+
+    #[test]
     fn is_end_of_device_error_only_tolerates_errors_near_the_end() {
         use std::io::{Error, ErrorKind};
         let buf = 8 * 1024 * 1024usize;
@@ -983,6 +1147,8 @@ mod tests {
                 codec: Codec::Zstd,
                 level: CompressionLevel(3),
                 total_bytes: Some(1000),
+                archive_format: tekflash_core::archive::ArchiveFormat::Tar,
+                archive_selection: None,
             },
             started_at: Instant::now(),
             bytes_in: 0,
@@ -990,6 +1156,7 @@ mod tests {
             instant_rate: 0.0,
             status: BackupStatus::Running,
             current_file: None,
+            current_dir: None,
             bytes_out_live: Arc::new(AtomicU64::new(0)),
             rx: std::sync::mpsc::channel().1,
             join_handle: None,

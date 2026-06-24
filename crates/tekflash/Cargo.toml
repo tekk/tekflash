@@ -41,6 +41,11 @@ time = { workspace = true }
 dirs = { workspace = true }
 hostname = { workspace = true }
 
+[dev-dependencies]
+# Needed by the progress-runner archive-selection test to decode the produced
+# `.tar.zst` and inspect the entry list.
+zstd = { workspace = true }
+
 [build-dependencies]
 clap = { version = "4.5", features = ["derive"] }
 clap_mangen = "0.2"
